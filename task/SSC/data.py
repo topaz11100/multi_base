@@ -9,6 +9,9 @@ import torch
 from torch.utils.data import DataLoader, Dataset, random_split
 
 
+DEFAULT_SSC_DATA_ROOT = Path(__file__).resolve().parents[2] / "shd_ssc_data" / "ssc"
+
+
 class SSCH5Dataset(Dataset):
     def __init__(self, root: str | Path, split: str):
         self.root = Path(root)

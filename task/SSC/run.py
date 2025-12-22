@@ -12,7 +12,7 @@ from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from task.SSC.data import make_dataloaders
+from task.SSC.data import DEFAULT_SSC_DATA_ROOT, make_dataloaders
 from task.SSC.model import build_model
 from task.SSC.util import (
     accuracy_top1,
@@ -37,7 +37,7 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", default="cuda")
 
-    parser.add_argument("--data-root", default="../../ssd_ssh_data/") # required=True 제거
+    parser.add_argument("--data-root", default=str(DEFAULT_SSC_DATA_ROOT)) # required=True 제거
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-4)
