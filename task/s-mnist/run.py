@@ -159,7 +159,7 @@ def train_one_epoch(model: nn.Module, loader, optimizer, device, neuron: str):
     for x, y in tqdm(loader, desc=f"train-{neuron}"):
         x = x.to(device)
         y = y.to(device)
-        reset_states(model)
+        reset_states(model, batch_size=x.size(0), device=device)
         optimizer.zero_grad()
         logits = model(x)
         loss = criterion(logits, y)
@@ -184,7 +184,7 @@ def evaluate(model: nn.Module, loader, device, neuron: str):
         for x, y in tqdm(loader, desc=f"eval-{neuron}"):
             x = x.to(device)
             y = y.to(device)
-            reset_states(model)
+            reset_states(model, batch_size=x.size(0), device=device)
             logits = model(x)
             loss = criterion(logits, y)
             batch_size = y.size(0)

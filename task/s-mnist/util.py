@@ -1,19 +1,21 @@
 import json
 import random
+import warnings
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable
 
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from matplotlib import pyplot as plt
 
 
 def set_seed(seed: int, deterministic: bool = True) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
     if deterministic:
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
@@ -30,24 +32,59 @@ def accuracy_top1(logits: torch.Tensor, targets: torch.Tensor) -> float:
     return (preds == targets).float().mean().item()
 
 
-def reset_states(model: torch.nn.Module) -> None:
+def _try_reset_state(module: torch.nn.Module, batch_size, device):
+    """Attempt to reset state with several common signatures."""
+
+    attempts = []
+    if batch_size is not None or device is not None:
+        attempts.append(((), {"batch_size": batch_size, "device": device}))
+    if batch_size is not None and device is not None:
+        attempts.append(((batch_size, device), {}))
+    if batch_size is not None:
+        attempts.append(((batch_size,), {}))
+    if device is not None:
+        attempts.append(((), {"device": device}))
+
+    for args, kwargs in attempts:
+        try:
+            module.reset_state(*args, **kwargs)
+            return True
+        except TypeError:
+            continue
+    return False
+
+
+def reset_states(
+    model: torch.nn.Module,
+    batch_size: int | None = None,
+    device: torch.device | str | None = None,
+) -> None:
     for module in model.modules():
-        if hasattr(module, "reset_state"):
-            try:
-                module.reset_state()
-            except TypeError:
-                # allow optional batch/device args for DH layers
-                pass
-        elif hasattr(module, "reset"):
+        if hasattr(module, "reset"):
             try:
                 module.reset()
+                continue
             except TypeError:
-                pass
+                last_error = "reset() signature mismatch"
+                if hasattr(module, "reset_state") and _try_reset_state(module, batch_size, device):
+                    continue
+        elif hasattr(module, "reset_state"):
+            try:
+                module.reset_state()
+                continue
+            except TypeError:
+                if _try_reset_state(module, batch_size, device):
+                    continue
+                last_error = "reset_state() signature mismatch"
+        else:
+            continue
+
+        warnings.warn(
+            f"State reset failed for module {module.__class__.__name__}: {last_error}",
+            RuntimeWarning,
+        )
         if hasattr(module, "y"):
             module.y = None
-        if hasattr(module, "names"):
-            for key in getattr(module, "names"):
-                module.names[key] = 0.0 if isinstance(module.names[key], (int, float)) else torch.zeros_like(module.names[key])
 
 
 def make_result_dir(exp_name: str) -> Path:

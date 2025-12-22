@@ -247,18 +247,36 @@ class StepModule:
 
 
 class BaseNode(MemoryModule):
-    def __init__(self,
-                 v_threshold: float = 1.,
-                 v_reset: float = 0.,
-                 surrogate_function: Callable = None,
-                 detach_reset: bool = False,
-                 step_mode='s', backend='torch',
-                 store_v_seq: bool = True):
+    def __init__(
+        self,
+        v_threshold: float = 1.0,
+        v_reset: float = 0.0,
+        surrogate_function: Callable = None,
+        detach_reset: bool = False,
+        step_mode='s',
+        backend='torch',
+        store_v_seq: bool = True,
+        hidden_dim: int | None = None,
+        neuron_shape: tuple[int, ...] | None = None,
+    ):
 
         assert isinstance(v_reset, float) or v_reset is None
         assert isinstance(v_threshold, float)
         assert isinstance(detach_reset, bool)
         super().__init__()
+
+        resolved_hidden = hidden_dim
+        if resolved_hidden is None and neuron_shape is not None:
+            if len(neuron_shape) != 1:
+                raise ValueError(f"neuron_shape must be 1D for TS-LIF, got {neuron_shape}.")
+            resolved_hidden = int(neuron_shape[0])
+        if resolved_hidden is None:
+            raise ValueError("hidden_dim or neuron_shape must be provided for TS-LIF neurons")
+        if resolved_hidden <= 0:
+            raise ValueError(f"hidden_dim must be positive, got {resolved_hidden}")
+
+        self.hidden_dim = resolved_hidden
+        self.neuron_shape = (resolved_hidden,)
 
         if v_reset is None:
             self.register_memory('v', 0.)
@@ -277,9 +295,8 @@ class BaseNode(MemoryModule):
 
         self.store_v_seq = store_v_seq
 
-
-        self.alpha_s = torch.nn.Parameter(torch.randn([1, 128], dtype=torch.float))
-        self.alpha_l = torch.nn.Parameter(torch.randn([1, 128], dtype=torch.float))
+        self.alpha_s = torch.nn.Parameter(torch.randn([1, self.hidden_dim], dtype=torch.float))
+        self.alpha_l = torch.nn.Parameter(torch.randn([1, self.hidden_dim], dtype=torch.float))
 
     @property
     def store_v_seq(self):
@@ -359,17 +376,29 @@ class BaseNode(MemoryModule):
 
 
 class TSLIFNode(BaseNode):
-    def __init__(self,
-                 v_threshold=1.0,
-                 v_reset=0.,
-                 surrogate_function: Callable = None,
-                 detach_reset=False,
-                 hard_reset=False,
-                 step_mode='s',
-                 k=2,
-                 decay_factor: torch.Tensor = torch.tensor([0.8, 0.2, 0.3, 0.7], dtype=torch.float),
-                 gamma: float = 0.5):
-        super(TSLIFNode, self).__init__(v_threshold, v_reset, surrogate_function, detach_reset, step_mode)
+    def __init__(
+        self,
+        v_threshold=1.0,
+        v_reset=0.0,
+        surrogate_function: Callable = None,
+        detach_reset=False,
+        hard_reset=False,
+        step_mode='s',
+        k=2,
+        decay_factor: torch.Tensor = torch.tensor([0.8, 0.2, 0.3, 0.7], dtype=torch.float),
+        gamma: float = 0.5,
+        hidden_dim: int | None = None,
+        neuron_shape: tuple[int, ...] | None = None,
+    ):
+        super(TSLIFNode, self).__init__(
+            v_threshold,
+            v_reset,
+            surrogate_function,
+            detach_reset,
+            step_mode,
+            hidden_dim=hidden_dim,
+            neuron_shape=neuron_shape,
+        )
         self.k = k
         for i in range(1, self.k + 1):
             self.register_memory('v' + str(i), 0.)
@@ -415,7 +444,7 @@ class TSLIFNode(BaseNode):
         else:
             # hard reset
             for i in range(2, self.k + 1):
-                self.names['v' + str(i)] = self.jit_hard_reset(self.names['v' + str(i)], spike_d,  self.v_reset)
+                self.names['v' + str(i)] = self.jit_hard_reset(self.names['v' + str(i)], spike_s,  self.v_reset)
 
     def forward(self, x: torch.Tensor):
         # self.v = 0.
@@ -435,18 +464,36 @@ class TSLIFNode(BaseNode):
 
 
 class BaseNode1(MemoryModule):
-    def __init__(self,
-                 v_threshold: float = 1.,
-                 v_reset: float = 0.,
-                 surrogate_function: Callable = None,
-                 detach_reset: bool = False,
-                 step_mode='s', backend='torch',
-                 store_v_seq: bool = True):
+    def __init__(
+        self,
+        v_threshold: float = 1.0,
+        v_reset: float = 0.0,
+        surrogate_function: Callable = None,
+        detach_reset: bool = False,
+        step_mode='s',
+        backend='torch',
+        store_v_seq: bool = True,
+        hidden_dim: int | None = None,
+        neuron_shape: tuple[int, ...] | None = None,
+    ):
 
         assert isinstance(v_reset, float) or v_reset is None
         assert isinstance(v_threshold, float)
         assert isinstance(detach_reset, bool)
         super().__init__()
+
+        resolved_hidden = hidden_dim
+        if resolved_hidden is None and neuron_shape is not None:
+            if len(neuron_shape) != 1:
+                raise ValueError(f"neuron_shape must be 1D for TS-LIF, got {neuron_shape}.")
+            resolved_hidden = int(neuron_shape[0])
+        if resolved_hidden is None:
+            raise ValueError("hidden_dim or neuron_shape must be provided for TS-LIF neurons")
+        if resolved_hidden <= 0:
+            raise ValueError(f"hidden_dim must be positive, got {resolved_hidden}")
+
+        self.hidden_dim = resolved_hidden
+        self.neuron_shape = (resolved_hidden,)
 
         if v_reset is None:
             self.register_memory('v', 0.)
@@ -465,8 +512,8 @@ class BaseNode1(MemoryModule):
 
         self.store_v_seq = store_v_seq
         # dimension should change to fit the dataset.
-        self.alpha_s = torch.nn.Parameter(torch.randn([1, 168], dtype=torch.float))
-        self.alpha_l = torch.nn.Parameter(torch.randn([1, 168], dtype=torch.float))
+        self.alpha_s = torch.nn.Parameter(torch.randn([1, self.hidden_dim], dtype=torch.float))
+        self.alpha_l = torch.nn.Parameter(torch.randn([1, self.hidden_dim], dtype=torch.float))
 
 
         # self.v_threshold_s = torch.nn.Parameter(torch.tensor([1.], dtype=torch.float))
@@ -555,17 +602,29 @@ class BaseNode1(MemoryModule):
 
 
 class TSLIFNode2(BaseNode1):
-    def __init__(self,
-                 v_threshold=1.0,
-                 v_reset=0.,
-                 surrogate_function: Callable = None,
-                 detach_reset=False,
-                 hard_reset=False,
-                 step_mode='s',
-                 k=2,
-                 decay_factor: torch.Tensor = torch.tensor([0.8, 0.2, 0.3, 0.7], dtype=torch.float),
-                 gamma: float = 0.5):
-        super(TSLIFNode2, self).__init__(v_threshold, v_reset, surrogate_function, detach_reset, step_mode)
+    def __init__(
+        self,
+        v_threshold=1.0,
+        v_reset=0.0,
+        surrogate_function: Callable = None,
+        detach_reset=False,
+        hard_reset=False,
+        step_mode='s',
+        k=2,
+        decay_factor: torch.Tensor = torch.tensor([0.8, 0.2, 0.3, 0.7], dtype=torch.float),
+        gamma: float = 0.5,
+        hidden_dim: int | None = None,
+        neuron_shape: tuple[int, ...] | None = None,
+    ):
+        super(TSLIFNode2, self).__init__(
+            v_threshold,
+            v_reset,
+            surrogate_function,
+            detach_reset,
+            step_mode,
+            hidden_dim=hidden_dim,
+            neuron_shape=neuron_shape,
+        )
         self.k = k
         for i in range(1, self.k + 1):
             self.register_memory('v' + str(i), 0.)
@@ -611,7 +670,7 @@ class TSLIFNode2(BaseNode1):
         else:
             # hard reset
             for i in range(2, self.k + 1):
-                self.names['v' + str(i)] = self.jit_hard_reset(self.names['v' + str(i)], spike_d,  self.v_reset)
+                self.names['v' + str(i)] = self.jit_hard_reset(self.names['v' + str(i)], spike_s,  self.v_reset)
 
     def forward(self, x: torch.Tensor):
         # self.v = 0.
