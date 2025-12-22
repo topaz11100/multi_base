@@ -215,7 +215,7 @@ def main():
             "dt": args.dh_dt,
         },
         "tc": {"gamma": args.tc_gamma},
-        "cp": {"tau_initial": args.cp_tau_init},
+        "cp": {"tau_init": args.cp_tau_init},
         "ts": {"gamma": args.ts_gamma},
     }
 

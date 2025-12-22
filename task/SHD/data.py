@@ -12,6 +12,7 @@ def _load_shd_raw(data_root: Path) -> Tuple[dict, dict]:
     except ImportError as exc:  # pragma: no cover - optional dependency
         raise ImportError("tonic is required for SHD dataset handling") from exc
 
+    # tonic 캐시 문제 등으로 인한 경고가 뜰 수 있으나, 데이터 로딩 자체는 진행되도록 함
     train_ds = tonic.datasets.SHD(save_to=str(data_root), train=True)
     test_ds = tonic.datasets.SHD(save_to=str(data_root), train=False)
 
@@ -21,8 +22,10 @@ def _load_shd_raw(data_root: Path) -> Tuple[dict, dict]:
         labels = []
         for i in range(len(ds)):
             events, label = ds[i]
-            times.append(events[0].astype(np.float32))
-            units.append(events[1].astype(np.int64))
+            # 수정됨: events는 structured array이므로 필드명으로 접근해야 함
+            # 't': timestamps, 'x': neuron index
+            times.append(events["t"].astype(np.float32))
+            units.append(events["x"].astype(np.int64))
             labels.append(int(label))
         return {"times": np.array(times, dtype=object), "units": np.array(units, dtype=object)}, np.array(labels)
 
@@ -88,7 +91,8 @@ class SpikeIterator:
 
             indices = torch.LongTensor(coo).to(self.device)
             values = torch.ones(len(coo[0]), device=self.device)
-            dense = torch.sparse.FloatTensor(indices, values, torch.Size([len(batch_index), self.nb_steps, self.nb_units]))
+            # Sparse tensor construction
+            dense = torch.sparse_coo_tensor(indices, values, torch.Size([len(batch_index), self.nb_steps, self.nb_units]))
             X_batch = dense.to_dense()
             y_batch = torch.tensor(self.labels_[batch_index], device=self.device)
             self.counter += 1
