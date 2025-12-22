@@ -48,14 +48,14 @@ def image_to_sequence(image: torch.Tensor, in_dim: int, task: str, perm: Optiona
     return seq
 
 
-def collate_sequences(batch, in_dim: int, task: str, perm: Optional[np.ndarray]) -> Tuple[torch.Tensor, torch.Tensor]:
-    sequences = []
-    labels = []
-    for img, label in batch:
-        seq = image_to_sequence(img, in_dim=in_dim, task=task, perm=perm)
-        sequences.append(seq)
-        labels.append(label)
-    x = torch.stack(sequences, dim=0)  # [B, T, in_dim]
+def collate_sequences(batch, in_dim: int, task: str, perm: Optional[torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
+    imgs, labels = zip(*batch)
+    stacked = torch.stack(imgs, dim=0).view(len(batch), -1)
+    if task.upper() == "PSMNIST" and perm is not None:
+        stacked = stacked[:, perm]
+    if stacked.size(1) % in_dim != 0:
+        raise ValueError("Flattened image length must be divisible by in_dim")
+    x = stacked.view(len(batch), -1, in_dim)
     y = torch.tensor(labels, dtype=torch.long)
     return x, y
 
@@ -70,7 +70,7 @@ def make_dataloaders(args):
 
     perm = None
     if args.task.upper() == "PSMNIST":
-        perm = make_permutation(28 * 28, args.seed)
+        perm = torch.as_tensor(make_permutation(28 * 28, args.seed), dtype=torch.long)
 
     collate_fn = lambda batch: collate_sequences(batch, in_dim=args.in_dim, task=args.task, perm=perm)
 

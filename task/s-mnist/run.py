@@ -7,7 +7,6 @@ sys.path.append(str(ROOT))
 sys.path.append(str(Path(__file__).resolve().parent))
 
 import argparse
-import ast
 import json
 from datetime import datetime
 from typing import Dict, List
@@ -15,6 +14,7 @@ from typing import Dict, List
 import torch
 from torch import nn
 from torch.optim import Adam, AdamW, SGD
+from torch.cuda.amp import GradScaler, autocast
 from torch.optim.lr_scheduler import MultiStepLR
 from tqdm import tqdm
 
@@ -40,7 +40,7 @@ NEURON_LIST = ["cp", "tc", "ts", "dh-sfnn", "dh-srnn"]
 def parse_args():
     parser = argparse.ArgumentParser(description="S-MNIST comparison pipeline")
     parser.add_argument("--exp-name", default="s-mnist")
-    parser.add_argument("--device", default="cuda")
+    parser.add_argument("--device", default="auto")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--task", choices=["SMNIST", "PSMNIST"], default="SMNIST")
     parser.add_argument("--arch", choices=["ff", "fb"], default="ff")
@@ -52,6 +52,7 @@ def parse_args():
     parser.add_argument("--lr-milestones", nargs="*", type=int, default=[60, 80])
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--pin-memory", action="store_true")
+    parser.add_argument("--amp", action="store_true")
     parser.add_argument("--deterministic", action="store_true")
     parser.add_argument("--neurons", type=str, default="all")
     parser.add_argument("--hidden", type=str, default="64,256,256")
@@ -150,21 +151,38 @@ def build_with_param_match(neuron: str, base_hidden: List[int], target_params: i
     return best_model, best_param, best_hidden
 
 
-def train_one_epoch(model: nn.Module, loader, optimizer, device, neuron: str):
+def train_one_epoch(
+    model: nn.Module,
+    loader,
+    optimizer,
+    device,
+    neuron: str,
+    non_blocking: bool = False,
+    scaler: GradScaler | None = None,
+    amp_enabled: bool = False,
+):
     model.train()
     criterion = nn.CrossEntropyLoss()
     total_loss = 0.0
     total_acc = 0.0
     count = 0
     for x, y in tqdm(loader, desc=f"train-{neuron}"):
-        x = x.to(device)
-        y = y.to(device)
+        x = x.to(device, non_blocking=non_blocking)
+        y = y.to(device, non_blocking=non_blocking)
         reset_states(model, batch_size=x.size(0), device=device)
-        optimizer.zero_grad()
-        logits = model(x)
-        loss = criterion(logits, y)
-        loss.backward()
-        optimizer.step()
+        optimizer.zero_grad(set_to_none=True)
+        if amp_enabled and scaler is not None:
+            with autocast():
+                logits = model(x)
+                loss = criterion(logits, y)
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            logits = model(x)
+            loss = criterion(logits, y)
+            loss.backward()
+            optimizer.step()
         if hasattr(model, "apply_masks"):
             model.apply_masks()
         batch_size = y.size(0)
@@ -174,7 +192,7 @@ def train_one_epoch(model: nn.Module, loader, optimizer, device, neuron: str):
     return total_loss / max(count, 1), total_acc / max(count, 1)
 
 
-def evaluate(model: nn.Module, loader, device, neuron: str):
+def evaluate(model: nn.Module, loader, device, neuron: str, non_blocking: bool = False, amp_enabled: bool = False):
     model.eval()
     criterion = nn.CrossEntropyLoss()
     total_loss = 0.0
@@ -182,11 +200,16 @@ def evaluate(model: nn.Module, loader, device, neuron: str):
     count = 0
     with torch.no_grad():
         for x, y in tqdm(loader, desc=f"eval-{neuron}"):
-            x = x.to(device)
-            y = y.to(device)
+            x = x.to(device, non_blocking=non_blocking)
+            y = y.to(device, non_blocking=non_blocking)
             reset_states(model, batch_size=x.size(0), device=device)
-            logits = model(x)
-            loss = criterion(logits, y)
+            if amp_enabled:
+                with autocast():
+                    logits = model(x)
+                    loss = criterion(logits, y)
+            else:
+                logits = model(x)
+                loss = criterion(logits, y)
             batch_size = y.size(0)
             total_loss += loss.item() * batch_size
             total_acc += accuracy_top1(logits, y) * batch_size
@@ -198,7 +221,17 @@ def main():
     args = parse_args()
     args.hidden = parse_hidden(args.hidden)
     set_seed(args.seed, deterministic=args.deterministic)
-    device = torch.device(args.device)
+    if args.device == "auto":
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        device = torch.device(args.device)
+        if device.type == "cuda" and not torch.cuda.is_available():
+            raise RuntimeError("CUDA requested but not available. Use --device auto or cpu instead.")
+
+    # Auto pinning for GPU unless explicitly disabled
+    args.pin_memory = args.pin_memory or device.type == "cuda"
+    non_blocking = args.pin_memory and device.type == "cuda"
+    args.device = device.type
 
     neuron_kwargs = parse_neuron_kwargs(args)
 
@@ -223,6 +256,9 @@ def main():
     acc_histories = {}
     final_accs = {}
     per_neuron_info = {}
+
+    amp_enabled = args.amp and device.type == "cuda"
+    scaler = GradScaler(enabled=amp_enabled)
 
     for neuron in neuron_list:
         model, param_count, chosen_hidden = (
@@ -251,15 +287,30 @@ def main():
 
         train_curve: List[float] = []
         test_curve: List[float] = []
+        train_loss_curve: List[float] = []
+        test_loss_curve: List[float] = []
         best_acc = 0.0
         best_epoch = 0
 
         for epoch in tqdm(range(1, args.epochs + 1), desc=f"epoch-{neuron}"):
-            train_loss, train_acc = train_one_epoch(model, train_loader, optimizer, device, neuron)
-            _, test_acc = evaluate(model, test_loader, device, neuron)
+            train_loss, train_acc = train_one_epoch(
+                model,
+                train_loader,
+                optimizer,
+                device,
+                neuron,
+                non_blocking=non_blocking,
+                scaler=scaler,
+                amp_enabled=amp_enabled,
+            )
+            test_loss, test_acc = evaluate(
+                model, test_loader, device, neuron, non_blocking=non_blocking, amp_enabled=amp_enabled
+            )
             scheduler.step()
             train_curve.append(train_acc)
             test_curve.append(test_acc)
+            train_loss_curve.append(train_loss)
+            test_loss_curve.append(test_loss)
             if test_acc > best_acc:
                 best_acc = test_acc
                 best_epoch = epoch
@@ -272,6 +323,13 @@ def main():
             "best_test_acc": best_acc,
             "best_epoch": best_epoch,
             "final_test_acc": test_curve[-1] if test_curve else 0.0,
+            "final_train_acc": train_curve[-1] if train_curve else 0.0,
+            "final_train_loss": train_loss_curve[-1] if train_loss_curve else 0.0,
+            "final_test_loss": test_loss_curve[-1] if test_loss_curve else 0.0,
+            "train_acc_curve": train_curve,
+            "test_acc_curve": test_curve,
+            "train_loss_curve": train_loss_curve,
+            "test_loss_curve": test_loss_curve,
             "delay": None,
         }
 
@@ -284,12 +342,16 @@ def main():
                     f"hidden_dims: {per_neuron_info[neuron]['hidden_dims']}",
                     f"best_test_acc: {best_acc}",
                     f"best_epoch: {best_epoch}",
+                    f"final_train_acc: {per_neuron_info[neuron]['final_train_acc']}",
                     f"final_test_acc: {per_neuron_info[neuron]['final_test_acc']}",
+                    f"final_train_loss: {per_neuron_info[neuron]['final_train_loss']}",
+                    f"final_test_loss: {per_neuron_info[neuron]['final_test_loss']}",
                     "delay: null",
                 ]
             ),
         )
         plot_curves({neuron: test_curve}, out_dir / f"curve_{neuron}.png")
+        plot_curves({"train": train_loss_curve, "test": test_loss_curve}, out_dir / f"loss_{neuron}.png", ylabel="Loss")
 
     plot_curves(acc_histories, out_dir / "curves_all.png")
     plot_final_bar(final_accs, out_dir / "final_acc_bar.png")

@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from neurons.CP_LIF_neuron import CP_LIF
 from neurons.TC_LIF_neuron import TCLIFNode
@@ -28,8 +27,43 @@ class ModelConfig:
     warmup: int = 0
 
 
+def _reduce_update(
+    acc: Optional[torch.Tensor], cnt: int, out_t: torch.Tensor, t: int, warmup: int
+) -> Tuple[Optional[torch.Tensor], int]:
+    """Online accumulate outputs without materializing the time dimension."""
+
+    if t < warmup:
+        return acc, cnt
+    acc = out_t if acc is None else acc + out_t
+    return acc, cnt + 1
+
+
+def _reduce_finish(
+    acc: Optional[torch.Tensor],
+    cnt: int,
+    batch_size: int,
+    out_dim: int,
+    device: torch.device,
+    dtype: torch.dtype,
+    readout_mode: str,
+) -> torch.Tensor:
+    if acc is None or cnt == 0:
+        return torch.zeros(batch_size, out_dim, device=device, dtype=dtype)
+    if readout_mode == "mean":
+        return acc / cnt
+    return acc
+
+
 class FeedForwardNet(nn.Module):
-    def __init__(self, in_dim: int, hidden_dims: List[int], out_dim: int, neuron_ctor, readout_mode: str = "sum"):
+    def __init__(
+        self,
+        in_dim: int,
+        hidden_dims: List[int],
+        out_dim: int,
+        neuron_ctor,
+        readout_mode: str = "sum",
+        warmup: int = 0,
+    ):
         super().__init__()
         layers: List[nn.Module] = []
         prev_dim = in_dim
@@ -40,9 +74,11 @@ class FeedForwardNet(nn.Module):
         self.feature = nn.Sequential(*layers)
         self.readout = nn.Linear(prev_dim, out_dim)
         self.readout_mode = readout_mode
+        self.warmup = warmup
+        self.out_dim = out_dim
 
     # [유지] RecursionError 방지 코드
-    def reset_state(self):
+    def reset_state(self, batch_size: int | None = None, device: torch.device | None = None):
         for m in self.modules():
             if m is self:
                 continue
@@ -58,19 +94,33 @@ class FeedForwardNet(nn.Module):
                     pass
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        outputs = []
+        acc: Optional[torch.Tensor] = None
+        cnt = 0
         for t in range(x.size(1)):
             h = self.feature(x[:, t, :])
             out = self.readout(h)
-            outputs.append(out)
-        stacked = torch.stack(outputs, dim=1)
-        if self.readout_mode == "mean":
-            return stacked.mean(dim=1)
-        return stacked.sum(dim=1)
+            acc, cnt = _reduce_update(acc, cnt, out, t, self.warmup)
+        return _reduce_finish(
+            acc,
+            cnt,
+            x.size(0),
+            self.out_dim,
+            x.device,
+            x.dtype,
+            self.readout_mode,
+        )
 
 
 class SimpleSRNN(nn.Module):
-    def __init__(self, in_dim: int, hidden_dims: List[int], out_dim: int, neuron_ctor, readout_mode: str = "sum"):
+    def __init__(
+        self,
+        in_dim: int,
+        hidden_dims: List[int],
+        out_dim: int,
+        neuron_ctor,
+        readout_mode: str = "sum",
+        warmup: int = 0,
+    ):
         super().__init__()
         self.in_to_h1 = nn.Linear(in_dim, hidden_dims[0])
         self.h1_to_h1 = nn.Linear(hidden_dims[0], hidden_dims[0])
@@ -86,6 +136,8 @@ class SimpleSRNN(nn.Module):
         self.neuron = neuron_ctor((hidden_dims[0],))
         self.neuron2 = neuron_ctor((hidden_dims[1],)) if self.h2 else None
         self.readout_mode = readout_mode
+        self.warmup = warmup
+        self.out_dim = out_dim
 
     def reset_state(self, batch_size: int | None = None, device: torch.device | None = None):
         for m in [self.neuron, self.neuron2]:
@@ -106,7 +158,8 @@ class SimpleSRNN(nn.Module):
         h2_spike = None
         if self.h2:
             h2_spike = torch.zeros(B, self.h1_to_h2.out_features, device=x.device)
-        outputs = []
+        acc: Optional[torch.Tensor] = None
+        cnt = 0
         for t in range(x.size(1)):
             input_t = x[:, t, :]
             h1_input = self.in_to_h1(input_t) + self.h1_to_h1(h1_spike)
@@ -117,11 +170,8 @@ class SimpleSRNN(nn.Module):
                 out_t = self.out(h2_spike)
             else:
                 out_t = self.out(h1_spike)
-            outputs.append(out_t)
-        stacked = torch.stack(outputs, dim=1)
-        if self.readout_mode == "mean":
-            return stacked.mean(dim=1)
-        return stacked.sum(dim=1)
+            acc, cnt = _reduce_update(acc, cnt, out_t, t, self.warmup)
+        return _reduce_finish(acc, cnt, B, self.out_dim, x.device, x.dtype, self.readout_mode)
 
 
 class DHSFNN(nn.Module):
@@ -144,6 +194,7 @@ class DHSFNN(nn.Module):
         device = device or torch.device("cpu")
         self.readout_mode = readout_mode
         self.warmup = warmup
+        self.out_dim = out_dim
         self.layers = layers
         self.layer1 = spike_dense_test_denri_wotanh_R(
             in_dim, hidden, tau_ninitializer="uniform", low_n=low_n, high_n=high_n, vth=vth, dt=dt, branch=branch, device=device
@@ -160,7 +211,9 @@ class DHSFNN(nn.Module):
         if self.layer2 is not None:
             self.layer2.apply_mask()
 
-    def reset_state(self, batch_size: int, device: torch.device | None = None):
+    def reset_state(self, batch_size: int | None = None, device: torch.device | None = None):
+        if batch_size is None:
+            return
         dev = device or next(self.parameters()).device
         self.layer1.set_neuron_state(batch_size, device=dev)
         if self.layer2 is not None:
@@ -168,21 +221,16 @@ class DHSFNN(nn.Module):
         self.readout.set_neuron_state(batch_size, device=dev)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        outputs = []
+        acc: Optional[torch.Tensor] = None
+        cnt = 0
         for t in range(x.size(1)):
             _, spike1 = self.layer1(x[:, t, :])
             spike_mid = spike1
             if self.layer2 is not None:
                 _, spike_mid = self.layer2(spike1)
             mem = self.readout(spike_mid)
-            if self.readout_mode == "sum_softmax":
-                if t <= self.warmup:
-                    continue
-                outputs.append(F.softmax(mem, dim=1))
-            else:
-                outputs.append(mem)
-        stacked = torch.stack(outputs, dim=1) if outputs else torch.zeros(x.size(0), 1, self.readout.out_features, device=x.device)
-        return stacked.sum(dim=1)
+            acc, cnt = _reduce_update(acc, cnt, mem, t, self.warmup)
+        return _reduce_finish(acc, cnt, x.size(0), self.out_dim, x.device, x.dtype, self.readout_mode)
 
 
 class DHSRNN(nn.Module):
@@ -204,6 +252,7 @@ class DHSRNN(nn.Module):
         device = device or torch.device("cpu")
         self.readout_mode = readout_mode
         self.warmup = warmup
+        self.out_dim = out_dim
         self.rnn = spike_rnn_test_denri_wotanh_R(
             in_dim, hidden, tau_ninitializer="uniform", low_n=low_n, high_n=high_n, vth=vth, dt=dt, branch=branch, device=device
         )
@@ -212,31 +261,26 @@ class DHSRNN(nn.Module):
     def apply_masks(self):
         self.rnn.apply_mask()
 
-    def reset_state(self, batch_size: int, device: torch.device | None = None):
+    def reset_state(self, batch_size: int | None = None, device: torch.device | None = None):
+        if batch_size is None:
+            return
         dev = device or next(self.parameters()).device
         self.rnn.set_neuron_state(batch_size, device=dev)
         self.readout.set_neuron_state(batch_size, device=dev)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        outputs = []
+        acc: Optional[torch.Tensor] = None
+        cnt = 0
         for t in range(x.size(1)):
             _, spike1 = self.rnn(x[:, t, :])
             mem = self.readout(spike1)
-            if self.readout_mode == "sum_softmax":
-                if t <= self.warmup:
-                    continue
-                outputs.append(F.softmax(mem, dim=1))
-            else:
-                outputs.append(mem)
-        stacked = torch.stack(outputs, dim=1) if outputs else torch.zeros(x.size(0), 1, self.readout.out_features, device=x.device)
-        return stacked.sum(dim=1)
+            acc, cnt = _reduce_update(acc, cnt, mem, t, self.warmup)
+        return _reduce_finish(acc, cnt, x.size(0), self.out_dim, x.device, x.dtype, self.readout_mode)
 
 
 def build_model(neuron_name: str, cfg: ModelConfig, neuron_kwargs: Dict) -> nn.Module:
     name = neuron_name.lower()
     readout_mode = cfg.readout_mode
-    if name.startswith("dh") and readout_mode == "sum":
-        readout_mode = "sum_softmax"
 
     if cfg.arch != "ff" and len(cfg.hidden_dims) < 2:
         raise ValueError(
@@ -260,8 +304,22 @@ def build_model(neuron_name: str, cfg: ModelConfig, neuron_kwargs: Dict) -> nn.M
             ctor = lambda shape: TSLIFNode(**kwargs, detach_reset=False, neuron_shape=shape)
             
         if cfg.arch == "ff":
-            return FeedForwardNet(cfg.in_dim, cfg.hidden_dims, cfg.out_dim, ctor, readout_mode)
-        return SimpleSRNN(cfg.in_dim, cfg.hidden_dims, cfg.out_dim, ctor, readout_mode)
+            return FeedForwardNet(
+                cfg.in_dim,
+                cfg.hidden_dims,
+                cfg.out_dim,
+                ctor,
+                readout_mode,
+                cfg.warmup,
+            )
+        return SimpleSRNN(
+            cfg.in_dim,
+            cfg.hidden_dims,
+            cfg.out_dim,
+            ctor,
+            readout_mode,
+            cfg.warmup,
+        )
 
     if name == "dh-sfnn":
         dh_kwargs = neuron_kwargs.get("dh-sfnn", {})
