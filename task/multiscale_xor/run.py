@@ -152,7 +152,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Multiscale XOR delay sweep")
     # Experiment
     parser.add_argument("--exp_name", type=str, default="multiscale_xor")
-    parser.add_argument("--device", type=str, default="cpu")
+    parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--trials", type=int, default=1)
 

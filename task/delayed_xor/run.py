@@ -130,7 +130,7 @@ def prepare_hidden_dims(args, device: torch.device) -> Dict[str, int]:
 def main():
     parser = argparse.ArgumentParser(description="Delayed XOR comparison")
     parser.add_argument("--model", choices=["all", "dh", "cp", "tc", "ts"], default="all")
-    parser.add_argument("--delay_T", type=int, default=20)
+    parser.add_argument("--delay_T", type=int, default=400)
     parser.add_argument("--delay_T_delta", type=int, default=5)
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--steps_per_epoch", type=int, default=20)
@@ -139,7 +139,7 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-2)
     parser.add_argument("--hidden_dim", type=int, default=16)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--device", type=str, default="cpu")
+    parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--channel_size", type=int, default=20)
     parser.add_argument("--coding_time", type=int, default=10)
     parser.add_argument("--noise_rate", type=float, default=0.01)

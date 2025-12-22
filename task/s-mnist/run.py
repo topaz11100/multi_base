@@ -34,7 +34,7 @@ NEURON_LIST = ["cp", "tc", "ts", "dh-sfnn", "dh-srnn"]
 def parse_args():
     parser = argparse.ArgumentParser(description="S-MNIST comparison pipeline")
     parser.add_argument("--exp-name", default="s-mnist")
-    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--device", default="cuda")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--task", choices=["SMNIST", "PSMNIST"], default="SMNIST")
     parser.add_argument("--arch", choices=["ff", "fb"], default="ff")

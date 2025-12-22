@@ -31,7 +31,7 @@ def parse_args():
     parser.add_argument("--neurons", default="all", help="comma list or all")
     parser.add_argument("--protocol", default="tc", choices=["tc", "dh"])
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--device", default="cuda")
 
     parser.add_argument("--data-root", default="../../ssd_ssh_data/") # required=True 제거
     parser.add_argument("--epochs", type=int, default=100)
