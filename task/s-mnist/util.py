@@ -5,6 +5,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable
 
+import matplotlib
+
+# Headless-friendly backend for always-on plotting
+matplotlib.use("Agg")
+
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
@@ -54,18 +59,35 @@ def _try_reset_state(module: torch.nn.Module, batch_size, device):
     return False
 
 
+def _collect_reset_modules(model: torch.nn.Module):
+    modules = []
+    for module in model.modules():
+        if module is model:
+            continue
+        if hasattr(module, "reset") or hasattr(module, "reset_state"):
+            modules.append(module)
+    return modules
+
+
 def reset_states(
     model: torch.nn.Module,
     batch_size: int | None = None,
     device: torch.device | str | None = None,
+    verbose_reset: bool = False,
 ) -> None:
-    for module in model.modules():
+    # Prefer fast model-level reset if available
+    if hasattr(model, "reset_state") and _try_reset_state(model, batch_size, device):
+        return
+
+    if not hasattr(model, "_reset_cache"):
+        model._reset_cache = _collect_reset_modules(model)
+
+    for module in model._reset_cache:
         if hasattr(module, "reset"):
             try:
                 module.reset()
                 continue
             except TypeError:
-                last_error = "reset() signature mismatch"
                 if hasattr(module, "reset_state") and _try_reset_state(module, batch_size, device):
                     continue
         elif hasattr(module, "reset_state"):
@@ -75,14 +97,12 @@ def reset_states(
             except TypeError:
                 if _try_reset_state(module, batch_size, device):
                     continue
-                last_error = "reset_state() signature mismatch"
-        else:
-            continue
 
-        warnings.warn(
-            f"State reset failed for module {module.__class__.__name__}: {last_error}",
-            RuntimeWarning,
-        )
+        if verbose_reset:
+            warnings.warn(
+                f"State reset failed for module {module.__class__.__name__}",
+                RuntimeWarning,
+            )
         if hasattr(module, "y"):
             module.y = None
 
