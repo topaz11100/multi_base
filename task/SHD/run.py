@@ -58,7 +58,7 @@ def parse_args():
     parser.add_argument("--dh_scheduler_gamma", type=float, default=0.5)
     parser.add_argument("--dh_tau_lr_mult", type=float, default=2.0)
     parser.add_argument("--dh_sfnn_layers", type=int, default=2, choices=[1, 2])
-    parser.add_argument("--data_root", type=str, default="./data/shd")
+    parser.add_argument("--data_root", type=str, default="../../ssd_ssh_data/")
     parser.add_argument("--param_tolerance_ratio", type=float, default=0.05)
     parser.add_argument("--enforce_param_match", type=int, default=1)
     parser.add_argument("--readout_mode", type=str, default="sum_logits", choices=["sum_logits", "sum_softmax"])

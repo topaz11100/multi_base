@@ -33,7 +33,7 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", default="cpu")
 
-    parser.add_argument("--data-root", required=True)
+    parser.add_argument("--data-root", default="../../ssd_ssh_data/") # required=True 제거
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-4)

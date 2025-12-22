@@ -38,7 +38,7 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--task", choices=["SMNIST", "PSMNIST"], default="SMNIST")
     parser.add_argument("--arch", choices=["ff", "fb"], default="ff")
-    parser.add_argument("--in-dim", type=int, default=8, choices=[1, 4, 8])
+    parser.add_argument("--in-dim", type=int, default=1, choices=[1, 4, 8])
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--lr", type=float, default=5e-4)
