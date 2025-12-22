@@ -238,6 +238,11 @@ def build_model(neuron_name: str, cfg: ModelConfig, neuron_kwargs: Dict) -> nn.M
     if name.startswith("dh") and readout_mode == "sum":
         readout_mode = "sum_softmax"
 
+    if cfg.arch != "ff" and len(cfg.hidden_dims) < 2:
+        raise ValueError(
+            "SRNN architecture requires at least two hidden dimensions (e.g., --hidden 256 256)"
+        )
+
     if name in {"cp", "tc", "ts"}:
         if name == "cp":
             ctor = lambda shape: CP_LIF(shape, **neuron_kwargs.get("cp", {}))
@@ -245,14 +250,14 @@ def build_model(neuron_name: str, cfg: ModelConfig, neuron_kwargs: Dict) -> nn.M
             # [수정] partial 제거, surrogate.Triangle.apply 직접 할당
             kwargs = neuron_kwargs.get("tc", {}).copy()
             if "surrogate_function" not in kwargs:
-                kwargs["surrogate_function"] = surrogate.Triangle.apply 
+                kwargs["surrogate_function"] = surrogate.Triangle.apply
             ctor = lambda shape: TCLIFNode(**kwargs, detach_reset=False)
         else:
             # [수정] partial 제거, surrogate.Triangle.apply 직접 할당
             kwargs = neuron_kwargs.get("ts", {}).copy()
             if "surrogate_function" not in kwargs:
                 kwargs["surrogate_function"] = surrogate.Triangle.apply
-            ctor = lambda shape: TSLIFNode(**kwargs, detach_reset=False)
+            ctor = lambda shape: TSLIFNode(**kwargs, detach_reset=False, neuron_shape=shape)
             
         if cfg.arch == "ff":
             return FeedForwardNet(cfg.in_dim, cfg.hidden_dims, cfg.out_dim, ctor, readout_mode)
