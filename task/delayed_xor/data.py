@@ -1,6 +1,5 @@
 import torch
 
-
 def _xor_labels(channel_rate: tuple[float, float]):
     label = torch.zeros(len(channel_rate), len(channel_rate), dtype=torch.int64)
     label[1, 0] = 1

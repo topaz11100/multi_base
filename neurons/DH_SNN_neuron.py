@@ -20,7 +20,8 @@ b_j0_value = 0.01
 
 
 def gaussian(x, mu=0., sigma=.5):
-    return torch.exp(-((x - mu) ** 2) / (2 * sigma ** 2)) / torch.sqrt(2 * torch.tensor(math.pi)) / sigma
+    two_pi = x.new_tensor(2.0 * math.pi)
+    return torch.exp(-((x - mu) ** 2) / (2 * sigma ** 2)) / torch.sqrt(two_pi) / sigma
 
 # define approximate firing function
 
@@ -38,7 +39,7 @@ class ActFun_adp(torch.autograd.Function):
         scale = 6.0
         hight = .15
         if surrograte_type == 'G':
-            temp = torch.exp(-(input**2)/(2*lens**2))/torch.sqrt(2*torch.tensor(math.pi))/lens
+            temp = gaussian(input, mu=0., sigma=lens)
         #multi gaussian
         elif surrograte_type == 'MG':
             temp = gaussian(input, mu=0., sigma=lens) * (1. + hight) \

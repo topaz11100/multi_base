@@ -8,6 +8,7 @@ from neurons.CP_LIF_neuron import CP_LIF
 from neurons.DH_SNN_neuron import readout_integrator_test, spike_dense_test_denri_wotanh_R
 from neurons.TC_LIF_neuron import TCLIFNode
 from neurons.TS_LIF_neuron import TSLIFNode
+from neurons import surrogate as surrogate_fn
 from util import count_parameters
 
 
@@ -86,7 +87,8 @@ class Model_CP(_FeedForwardLIF):
 class Model_TC(_FeedForwardLIF):
     def __init__(self, input_dim: int, hidden_dim: int, output_dim: int, device: torch.device):
         super().__init__(input_dim, hidden_dim, output_dim, device)
-        self.node = TCLIFNode(step_mode="s")
+        surrogate_function = surrogate_fn.atan.apply
+        self.node = TCLIFNode(step_mode="s", surrogate_function=surrogate_function)
 
     def reset_state(self) -> None:
         self.node.reset()
@@ -101,7 +103,12 @@ class Model_TC(_FeedForwardLIF):
 class Model_TS(_FeedForwardLIF):
     def __init__(self, input_dim: int, hidden_dim: int, output_dim: int, device: torch.device):
         super().__init__(input_dim, hidden_dim, output_dim, device)
-        self.node = TSLIFNode(step_mode="s")
+        surrogate_function = surrogate_fn.atan.apply
+        self.node = TSLIFNode(
+            step_mode="s",
+            hidden_dim=hidden_dim,
+            surrogate_function=surrogate_function,
+        )
 
     def reset_state(self) -> None:
         self.node.reset()

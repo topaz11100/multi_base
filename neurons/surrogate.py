@@ -378,7 +378,8 @@ class Rectangle(torch.autograd.Function):
         return grad_input * temp.float()
 
 def gaussian(x, mu=0., sigma=.5):
-    return torch.exp(-((x - mu) ** 2) / (2 * sigma ** 2)) / torch.sqrt(2 * torch.tensor(math.pi)) / sigma
+    two_pi = x.new_tensor(2.0 * math.pi)
+    return torch.exp(-((x - mu) ** 2) / (2 * sigma ** 2)) / torch.sqrt(two_pi) / sigma
 
 gamma = 0.5  # gradient scale
 lens = 0.5
@@ -395,7 +396,7 @@ class ActFun_adp(torch.autograd.Function):
         # temp = abs(input) < lens
         scale = 6.0
         hight = .15
-        #temp = torch.exp(-(input**2)/(2*lens**2))/torch.sqrt(2*torch.tensor(math.pi))/lens
+        #temp = gaussian(input, mu=0., sigma=lens)
         temp = gaussian(input, mu=0., sigma=lens) * (1. + hight) \
                - gaussian(input, mu=lens, sigma=scale * lens) * hight \
                - gaussian(input, mu=-lens, sigma=scale * lens) * hight
