@@ -25,7 +25,7 @@ echo "2. Running S-MNIST Check..."
     --exp-name check_smnist \
     --epochs 1 \
     --batch-size 2048 \
-    --neurons tc,ts,dh-sfnn,dh-srnn
+    --neurons dh-sfnn,dh-srnn
 
 
 # 3. Delayed XOR Task
