@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from torch.optim import Adam
 from tqdm import tqdm
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.append(str(ROOT))
 sys.path.append(str(Path(__file__).resolve().parent))
 

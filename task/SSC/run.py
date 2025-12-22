@@ -1,6 +1,10 @@
 import argparse
 from datetime import datetime
+import sys
 from pathlib import Path
+ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.append(str(ROOT))
+sys.path.append(str(Path(__file__).resolve().parent))
 
 import torch
 from torch import nn, optim

@@ -10,8 +10,9 @@ from torch import nn
 from torch.optim.lr_scheduler import StepLR
 from tqdm import tqdm
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.append(str(ROOT))
+sys.path.append(str(Path(__file__).resolve().parent))
 
 from task.SHD.data import get_shd_loaders  # noqa: E402
 from task.SHD.model import build_model  # noqa: E402

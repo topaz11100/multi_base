@@ -14,7 +14,7 @@ from torch.optim import Adam
 from torch.optim.lr_scheduler import StepLR
 from tqdm import tqdm
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.append(str(ROOT))
 sys.path.append(str(Path(__file__).resolve().parent))
 
