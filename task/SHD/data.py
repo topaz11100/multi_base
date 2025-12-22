@@ -1,9 +1,11 @@
-import json
 from pathlib import Path
 from typing import Tuple
 
 import numpy as np
 import torch
+
+
+DEFAULT_DATA_ROOT = Path(__file__).resolve().parents[2] / "shd_ssc_data" / "shd"
 
 
 def _load_shd_raw(data_root: Path) -> Tuple[dict, dict]:
@@ -13,6 +15,7 @@ def _load_shd_raw(data_root: Path) -> Tuple[dict, dict]:
         raise ImportError("tonic is required for SHD dataset handling") from exc
 
     # tonic 캐시 문제 등으로 인한 경고가 뜰 수 있으나, 데이터 로딩 자체는 진행되도록 함
+    data_root.mkdir(parents=True, exist_ok=True)
     train_ds = tonic.datasets.SHD(save_to=str(data_root), train=True)
     test_ds = tonic.datasets.SHD(save_to=str(data_root), train=False)
 
@@ -107,33 +110,45 @@ def get_shd_loaders(
     in_dim: int = 700,
     seed: int = 0,
     num_workers: int = 0,
-    data_root: str | Path = "./data/shd",
+    data_root: str | Path | None = None,
     cache_dense: bool = True,
     device: torch.device | None = None,
 ):
     np.random.seed(seed)
-    data_root = Path(data_root)
+    resolved_root = Path(data_root) if data_root is not None else DEFAULT_DATA_ROOT
+    data_root = resolved_root
     cache_root = data_root / "cache"
     cache_root.mkdir(parents=True, exist_ok=True)
     cache_file = cache_root / f"shd_cache_T{T}_mt{max_time}_in{in_dim}.npz"
+
+    loaded_cache = None
     if cache_dense and cache_file.exists():
-        loaded = np.load(cache_file, allow_pickle=True)
-        train_raw = json.loads(loaded["train"].item())
-        test_raw = json.loads(loaded["test"].item())
-        x_train = {"times": np.array(train_raw["times"], dtype=object), "units": np.array(train_raw["units"], dtype=object)}
-        y_train = np.array(train_raw["labels"], dtype=np.int64)
-        x_test = {"times": np.array(test_raw["times"], dtype=object), "units": np.array(test_raw["units"], dtype=object)}
-        y_test = np.array(test_raw["labels"], dtype=np.int64)
-    else:
+        try:
+            loaded_cache = np.load(cache_file, allow_pickle=True)
+            x_train = {"times": loaded_cache["train_times"], "units": loaded_cache["train_units"]}
+            y_train = loaded_cache["train_labels"]
+            x_test = {"times": loaded_cache["test_times"], "units": loaded_cache["test_units"]}
+            y_test = loaded_cache["test_labels"]
+        except KeyError:
+            cache_file.unlink(missing_ok=True)
+            loaded_cache = None
+
+    if loaded_cache is None:
         train_raw, test_raw = _load_shd_raw(data_root)
         x_train = {"times": train_raw["times"], "units": train_raw["units"]}
         y_train = train_raw["labels"]
         x_test = {"times": test_raw["times"], "units": test_raw["units"]}
         y_test = test_raw["labels"]
         if cache_dense:
-            packed_train = {"times": train_raw["times"].tolist(), "units": train_raw["units"].tolist(), "labels": y_train.tolist()}
-            packed_test = {"times": test_raw["times"].tolist(), "units": test_raw["units"].tolist(), "labels": y_test.tolist()}
-            np.savez(cache_file, train=json.dumps(packed_train), test=json.dumps(packed_test))
+            np.savez(
+                cache_file,
+                train_times=train_raw["times"],
+                train_units=train_raw["units"],
+                train_labels=y_train,
+                test_times=test_raw["times"],
+                test_units=test_raw["units"],
+                test_labels=y_test,
+            )
 
     device = device or torch.device("cpu")
     train_loader = SpikeIterator(x_train, y_train, batch_size, T, in_dim, max_time, device=device, shuffle=True)
