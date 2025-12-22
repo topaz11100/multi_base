@@ -114,7 +114,9 @@ def output_Neuron_pra(inputs, mem, tau_m, dt=1,device=None):
         mem(float): soma membrane potential
         tau_m(float): time factors of soma
     """
-    alpha = torch.sigmoid(tau_m).to(device)
+    alpha = torch.sigmoid(tau_m)
+    if device is not None and alpha.device != torch.device(device):
+        alpha = alpha.to(device)
     mem = mem *alpha +  (1-alpha)*inputs
     return mem
 
@@ -144,14 +146,27 @@ class readout_integrator_test(nn.Module):
             nn.init.constant_(self.tau_m,low_m)
 
     
-    def set_neuron_state(self,batch_size):
-        self.mem = (torch.rand(batch_size,self.output_dim)).to(self.device)
-    
+    def _infer_device(self, device=None, ref=None, input_tensor=None):
+        if device is not None:
+            return torch.device(device)
+        if input_tensor is not None:
+            return input_tensor.device
+        if ref is not None:
+            return ref.device
+        return torch.device(self.device)
+
+    def set_neuron_state(self,batch_size, device=None):
+        dev = self._infer_device(device=device, ref=self.dense.weight)
+        self.device = dev
+        self.mem = torch.rand(batch_size,self.output_dim, device=dev)
+
     def forward(self,input_spike):
+        dev = self._infer_device(input_tensor=input_spike, ref=self.dense.weight)
         #synaptic inputs
         d_input = self.dense(input_spike.float())
         # neuron model without spiking
-        self.mem = output_Neuron_pra(d_input,self.mem,self.tau_m,self.dt,device=self.device)
+        assert self.mem.device == dev, "state device mismatch; reset_state/set_neuron_state not called or wrong device"
+        self.mem = output_Neuron_pra(d_input,self.mem,self.tau_m,self.dt,device=dev)
         return self.mem
 
 
@@ -195,7 +210,7 @@ class spike_dense_test_denri_wotanh_R(nn.Module):
         self.tau_m = nn.Parameter(torch.Tensor(self.output_dim))
         self.tau_n = nn.Parameter(torch.Tensor(self.output_dim,branch))
         self.test_sparsity = test_sparsity
-        
+
         #the number of dendritic branch
         self.branch = branch
 
@@ -216,24 +231,35 @@ class spike_dense_test_denri_wotanh_R(nn.Module):
 
     
 
+    def _infer_device(self, device=None, ref=None, input_tensor=None):
+        if device is not None:
+            return torch.device(device)
+        if input_tensor is not None:
+            return input_tensor.device
+        if ref is not None:
+            return ref.device
+        return torch.device(self.device)
+
     #init
-    def set_neuron_state(self,batch_size):
+    def set_neuron_state(self,batch_size, device=None):
+        dev = self._infer_device(device=device, ref=self.dense.weight)
+        self.device = dev
         #mambrane potential
-        self.mem = Variable(torch.rand(batch_size,self.output_dim)).to(self.device)
-        self.spike = Variable(torch.rand(batch_size,self.output_dim)).to(self.device)
+        self.mem = Variable(torch.rand(batch_size,self.output_dim, device=dev))
+        self.spike = Variable(torch.rand(batch_size,self.output_dim, device=dev))
         # dendritic currents
         if self.branch == 1:
-            self.d_input = Variable(torch.rand(batch_size,self.output_dim,self.branch)).to(self.device)
+            self.d_input = Variable(torch.rand(batch_size,self.output_dim,self.branch, device=dev))
         else:
-            self.d_input = Variable(torch.zeros(batch_size,self.output_dim,self.branch)).to(self.device)
+            self.d_input = Variable(torch.zeros(batch_size,self.output_dim,self.branch, device=dev))
         #threshold
-        self.v_th = Variable(torch.ones(batch_size,self.output_dim)*self.vth).to(self.device)
+        self.v_th = Variable(torch.ones(batch_size,self.output_dim, device=dev)*self.vth)
 
     #create connection pattern
     def create_mask(self):
-        
+
         input_size = self.input_dim+self.pad
-        self.mask = torch.zeros(self.output_dim*self.branch,input_size).to(self.device)
+        mask = torch.zeros(self.output_dim*self.branch,input_size)
         for i in range(self.output_dim//self.mask_share):
             seq = torch.randperm(input_size)
             # j as the branch index
@@ -241,29 +267,39 @@ class spike_dense_test_denri_wotanh_R(nn.Module):
                 if self.test_sparsity:
                     if j*input_size // self.branch+int(input_size * self.sparsity)>input_size:
                         for k in range(self.mask_share):
-                            self.mask[(i*self.mask_share+k)*self.branch+j,seq[j*input_size // self.branch:-1]] = 1
-                            self.mask[(i*self.mask_share+k)*self.branch+j,seq[:j*input_size // self.branch+int(input_size * self.sparsity)-input_size]] = 1
-                    else: 
+                            mask[(i*self.mask_share+k)*self.branch+j,seq[j*input_size // self.branch:-1]] = 1
+                            mask[(i*self.mask_share+k)*self.branch+j,seq[:j*input_size // self.branch+int(input_size * self.sparsity)-input_size]] = 1
+                    else:
                         for k in range(self.mask_share):
-                            self.mask[(i*self.mask_share+k)*self.branch+j,seq[j*input_size // self.branch:j*input_size // self.branch+int(input_size * self.sparsity)]] = 1
+                            mask[(i*self.mask_share+k)*self.branch+j,seq[j*input_size // self.branch:j*input_size // self.branch+int(input_size * self.sparsity)]] = 1
                 else:
                     for k in range(self.mask_share):
-                        self.mask[(i*self.mask_share+k)*self.branch+j,seq[j*input_size // self.branch:(j+1)*input_size // self.branch]] = 1
+                        mask[(i*self.mask_share+k)*self.branch+j,seq[j*input_size // self.branch:(j+1)*input_size // self.branch]] = 1
+        if hasattr(self, "mask"):
+            self.mask.copy_(mask.to(self.mask.device))
+        else:
+            self.register_buffer("mask", mask)
     def apply_mask(self):
-        self.dense.weight.data = self.dense.weight.data*self.mask
+        with torch.no_grad():
+            mask_dev = self.mask
+            if mask_dev.device != self.dense.weight.device:
+                mask_dev = mask_dev.to(self.dense.weight.device)
+            self.dense.weight.mul_(mask_dev)
     def forward(self,input_spike):
         # timing factor of dendritic branches
         beta = torch.sigmoid(self.tau_n)
-        padding = torch.zeros(input_spike.size(0),self.pad).to(self.device)
+        dev = self._infer_device(input_tensor=input_spike, ref=self.dense.weight)
+        padding = input_spike.new_zeros(input_spike.size(0),self.pad)
         k_input = torch.cat((input_spike.float(),padding),1)
-        #update dendritic currents 
+        assert self.mem.device == dev, "state device mismatch; reset_state/set_neuron_state not called or wrong device"
+        #update dendritic currents
         self.d_input = beta*self.d_input+(1-beta)*self.dense(k_input).reshape(-1,self.output_dim,self.branch)
         #summation of dendritic currents
         l_input = (self.d_input).sum(dim=2,keepdim=False)
-        
+
         #update membrane potential and generate spikes
-        self.mem,self.spike = mem_update_pra(l_input,self.mem,self.spike,self.v_th,self.tau_m,self.dt,device=self.device)
-        
+        self.mem,self.spike = mem_update_pra(l_input,self.mem,self.spike,self.v_th,self.tau_m,self.dt,device=dev)
+
         return self.mem,self.spike
     
     
@@ -447,35 +483,53 @@ class spike_dense_test_denri_wotanh_R_xor(nn.Module):
             nn.init.uniform_(self.tau_n[:,0],low_n1,high_n1)
             nn.init.uniform_(self.tau_n[:,1],low_n2,high_n2)
 
-    
+    def _infer_device(self, device=None, ref=None, input_tensor=None):
+        if device is not None:
+            return torch.device(device)
+        if input_tensor is not None:
+            return input_tensor.device
+        if ref is not None:
+            return ref.device
+        return torch.device(self.device)
 
-    
-    def set_neuron_state(self,batch_size):
+    def set_neuron_state(self,batch_size, device=None):
 
-        self.mem = Variable(torch.rand(batch_size,self.output_dim)).to(self.device)
-        self.spike = Variable(torch.rand(batch_size,self.output_dim)).to(self.device)
-        self.d_input = Variable(torch.zeros(batch_size,self.output_dim,self.branch)).to(self.device)
+        dev = self._infer_device(device=device, ref=self.dense.weight)
+        self.device = dev
+        self.mem = Variable(torch.rand(batch_size,self.output_dim, device=dev))
+        self.spike = Variable(torch.rand(batch_size,self.output_dim, device=dev))
+        self.d_input = Variable(torch.zeros(batch_size,self.output_dim,self.branch, device=dev))
 
-        self.v_th = Variable(torch.ones(batch_size,self.output_dim)*self.vth).to(self.device)
+        self.v_th = Variable(torch.ones(batch_size,self.output_dim, device=dev)*self.vth)
 
     def create_mask(self):
         input_size = self.input_dim+self.pad
-        self.mask = torch.zeros(self.output_dim*self.branch,input_size).to(self.device)
+        mask = torch.zeros(self.output_dim*self.branch,input_size)
         for i in range(self.output_dim):
             for j in range(self.branch):
-                self.mask[i*self.branch+j,j*input_size // self.branch:(j+1)*input_size // self.branch] = 1
+                mask[i*self.branch+j,j*input_size // self.branch:(j+1)*input_size // self.branch] = 1
+        if hasattr(self, "mask"):
+            self.mask.copy_(mask.to(self.mask.device))
+        else:
+            self.register_buffer("mask", mask)
     def apply_mask(self):
-        self.dense.weight.data = self.dense.weight.data*self.mask
+        with torch.no_grad():
+            mask_dev = self.mask
+            if mask_dev.device != self.dense.weight.device:
+                mask_dev = mask_dev.to(self.dense.weight.device)
+            self.dense.weight.mul_(mask_dev)
     def forward(self,input_spike):
 
         beta = torch.sigmoid(self.tau_n)
-        padding = torch.zeros(input_spike.size(0),self.pad).to(self.device)
+        dev = self._infer_device(input_tensor=input_spike, ref=self.dense.weight)
+        padding = input_spike.new_zeros(input_spike.size(0),self.pad)
         k_input = torch.cat((input_spike.float(),padding),1)
         self.d_input = beta*self.d_input+(1-beta)*self.dense(k_input).reshape(-1,self.output_dim,self.branch)
 
         l_input = (self.d_input).sum(dim=2,keepdim=False)
-        self.mem,self.spike = mem_update_pra(l_input,self.mem,self.spike,self.v_th,self.tau_m,self.dt,device=self.device)
-        
+        assert self.mem.device == dev, "state device mismatch; reset_state/set_neuron_state not called or wrong device"
+        self.mem,self.spike = mem_update_pra(l_input,self.mem,self.spike,self.v_th,self.tau_m,self.dt,device=dev)
+
         return self.mem,self.spike
     
 #Vanilla SRNN layer
@@ -614,40 +668,57 @@ class spike_rnn_test_denri_wotanh_R(nn.Module):
         elif tau_ninitializer == 'constant':
             nn.init.constant_(self.tau_n,low_n)
 
-    
-    def parameters(self):
-        return [self.dense.weight,self.dense.bias,self.tau_m,self.tau_n]
-    
     #init
-    def set_neuron_state(self,batch_size):
+    def _infer_device(self, device=None, ref=None, input_tensor=None):
+        if device is not None:
+            return torch.device(device)
+        if input_tensor is not None:
+            return input_tensor.device
+        if ref is not None:
+            return ref.device
+        return torch.device(self.device)
 
-        self.mem = Variable(torch.rand(batch_size,self.output_dim)).to(self.device)
-        self.spike = Variable(torch.rand(batch_size,self.output_dim)).to(self.device)
-        self.d_input = Variable(torch.zeros(batch_size,self.output_dim,self.branch)).to(self.device)
+    def set_neuron_state(self,batch_size, device=None):
 
-        self.v_th = Variable(torch.ones(batch_size,self.output_dim)*self.vth).to(self.device)
+        dev = self._infer_device(device=device, ref=self.dense.weight)
+        self.device = dev
+        self.mem = Variable(torch.rand(batch_size,self.output_dim, device=dev))
+        self.spike = Variable(torch.rand(batch_size,self.output_dim, device=dev))
+        self.d_input = Variable(torch.zeros(batch_size,self.output_dim,self.branch, device=dev))
+
+        self.v_th = Variable(torch.ones(batch_size,self.output_dim, device=dev)*self.vth)
 
     #create connection pattern
     def create_mask(self):
         input_size = self.input_dim+self.output_dim+self.pad
-        self.mask = torch.zeros(self.output_dim*self.branch,input_size).to(self.device)
+        mask = torch.zeros(self.output_dim*self.branch,input_size)
         for i in range(self.output_dim):
             seq = torch.randperm(input_size)
             for j in range(self.branch):
-                self.mask[i*self.branch+j,seq[j*input_size // self.branch:(j+1)*input_size // self.branch]] = 1
+                mask[i*self.branch+j,seq[j*input_size // self.branch:(j+1)*input_size // self.branch]] = 1
+        if hasattr(self, "mask"):
+            self.mask.copy_(mask.to(self.mask.device))
+        else:
+            self.register_buffer("mask", mask)
     def apply_mask(self):
-        self.dense.weight.data = self.dense.weight.data*self.mask
+        with torch.no_grad():
+            mask_dev = self.mask
+            if mask_dev.device != self.dense.weight.device:
+                mask_dev = mask_dev.to(self.dense.weight.device)
+            self.dense.weight.mul_(mask_dev)
     def forward(self,input_spike):
         # timing factor of dendritic branches
         beta = torch.sigmoid(self.tau_n)
-        padding = torch.zeros(input_spike.size(0),self.pad).to(self.device)
+        dev = self._infer_device(input_tensor=input_spike, ref=self.dense.weight)
+        padding = input_spike.new_zeros(input_spike.size(0),self.pad)
         k_input = torch.cat((input_spike.float(),self.spike,padding),1)
-        #update dendritic currents 
+        assert self.mem.device == dev and self.spike.device == dev, "state device mismatch; reset_state/set_neuron_state not called or wrong device"
+        #update dendritic currents
         self.d_input = beta*self.d_input+(1-beta)*self.dense(k_input).reshape(-1,self.output_dim,self.branch)
         #summation of dendritic currents
         l_input = (self.d_input).sum(dim=2,keepdim=False)
-        
+
         #update membrane potential and generate spikes
-        self.mem,self.spike = mem_update_pra(l_input,self.mem,self.spike,self.v_th,self.tau_m,self.dt,device=self.device)
-        
+        self.mem,self.spike = mem_update_pra(l_input,self.mem,self.spike,self.v_th,self.tau_m,self.dt,device=dev)
+
         return self.mem,self.spike
