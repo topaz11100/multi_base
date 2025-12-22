@@ -24,7 +24,7 @@ def set_seed(seed: int, deterministic: bool = True) -> None:
 
 def make_result_dir(exp_name: str) -> Path:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    path = Path("/result") / f"{exp_name}_{timestamp}"
+    path = Path("../../result") / f"{exp_name}_{timestamp}"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
