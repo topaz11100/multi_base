@@ -1,4 +1,3 @@
-import sys
 import warnings
 import yaml
 from utilsd import get_output_dir, get_checkpoint_dir, setup_experiment
@@ -56,8 +55,6 @@ if __name__ == "__main__":
     # config_yaml = yaml.load(open(onfig_yaml, "r"), Loader=yaml.FullLoader)
     # _config = SeqSNNConfig(**config_yaml)
     # run_train(_config)
-    sys.argv = ["python", "/home/feng/feng5/timeseries/exp/forecast/spikegru/spikegru_electricity.yml"]
-
     # sys.argv = ["python", "/home/feng/feng5/timeseries/exp/forecast/ispikformer/ispikformer_electricity.yml"]
     # config_file_path = "/home/feng/feng5/timeseries/exp/forecast/spikegru/spikegru_electricity.yml"
     # _config = SeqSNNConfig.fromcli([config_file_path])

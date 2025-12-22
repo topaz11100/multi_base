@@ -11,7 +11,6 @@ from torch import nn
 from torch import optim
 from torch.utils.tensorboard.writer import SummaryWriter
 from torch.utils.data import Dataset, DataLoader
-from utilsd import use_cuda
 from utilsd.config import Registry
 from utilsd.earlystop import EarlyStop, EarlyStopStatus
 
@@ -62,10 +61,14 @@ class BaseRunner(nn.Module):
         self.checkpoint_dir = checkpoint_dir
         if model_path is not None:
             self.load(model_path)
-        # multi gpu
         if torch.cuda.is_available():
-            print("Using GPU")
-            self.cuda(device=3)
+            self.device = torch.device("cuda")
+            print(f"Using GPU: {torch.cuda.get_device_name(self.device)}")
+        else:
+            self.device = torch.device("cpu")
+            print("Using CPU")
+
+        self.to(self.device)
 
     def _build_network(self, network, *args, **kwargs) -> None:
         # TODO: encoder decoder decompose
@@ -206,10 +209,9 @@ class BaseRunner(nn.Module):
             # batch loop
             for data, label in loader:
                 # pre batch / fetch data
-                if use_cuda():
-                    data, label = to_torch(data, device="cuda:3"), to_torch(
-                        label, device="cuda:3"
-                    )
+                data, label = to_torch(data, device=self.device), to_torch(
+                    label, device=self.device
+                )
                 reset_states(model=self.network.net[0].tslif)
                 # Avoid error, TS-former !!
                 # reset_states(model=self.network.encoder.tc_lif)
@@ -445,10 +447,9 @@ class BaseRunner(nn.Module):
         validset.load()
         with torch.no_grad():
             for _, (data, label) in enumerate(loader):
-                if use_cuda():
-                    data, label = to_torch(data, device="cuda:3"), to_torch(
-                        label, device="cuda:3"
-                    )
+                data, label = to_torch(data, device=self.device), to_torch(
+                    label, device=self.device
+                )
                 reset_states(model=self.network.net[0].tslif)
                 # Avoid error, TS-former !!
                 # reset_states(model=self.network.encoder.tc_lif)
@@ -556,8 +557,7 @@ class BaseRunner(nn.Module):
             num_workers=8,
         )
         for data, _ in loader:
-            if use_cuda():
-                data = to_torch(data, device="cuda:3")
+            data = to_torch(data, device=self.device)
             reset_states(model=self.network.net[0].tslif)
             # Avoid error  TS-former !!
             # reset_states(model=self.network.encoder.tc_lif)
