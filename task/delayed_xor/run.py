@@ -16,6 +16,7 @@ from data import generate_batch
 from model import get_model
 from util import (
     SaveManager,
+    apply_masks,
     count_parameters,
     dry_run,
     format_settings,
@@ -43,6 +44,7 @@ def train_one_delay(
     device: torch.device,
 ) -> Tuple[float, int]:
     model = get_model(model_name, args.channel_size, hidden_dim, 2, device)
+    apply_masks(model)
     optimizer = Adam(model.parameters(), lr=args.lr)
 
     time_steps = args.time_steps or (delay + args.coding_time * 2 + args.tail_time)
@@ -74,6 +76,7 @@ def train_one_delay(
             loss, _ = compute_loss_and_acc(logits, target, mask)
             loss.backward()
             optimizer.step()
+            apply_masks(model)
 
     acc_sum = 0.0
     eval_batches = 0
@@ -96,10 +99,9 @@ def train_one_delay(
     return final_acc, count_parameters(model)
 
 
-def prepare_hidden_dims(args, device: torch.device) -> Dict[str, int]:
+def prepare_hidden_dims(args, device: torch.device, model_names: List[str]) -> Dict[str, int]:
     base_hidden = args.hidden_dim
     cpu = torch.device("cpu")
-    target_params = count_parameters(get_model("dh", args.channel_size, base_hidden, 2, cpu))
 
     builders = {
         "dh": lambda in_d, h, out_d, dev: get_model("dh", in_d, h, out_d, dev),
@@ -108,8 +110,18 @@ def prepare_hidden_dims(args, device: torch.device) -> Dict[str, int]:
         "ts": lambda in_d, h, out_d, dev: get_model("ts", in_d, h, out_d, dev),
     }
 
-    hidden_dims = {"dh": base_hidden}
-    for name in ["cp", "tc", "ts"]:
+    active = set(model_names)
+    hidden_dims: Dict[str, int] = {}
+    if "dh" in active:
+        hidden_dims["dh"] = base_hidden
+
+    target_params = None
+    if any(name in active for name in ("cp", "tc", "ts")):
+        target_params = count_parameters(get_model("dh", args.channel_size, base_hidden, 2, cpu))
+
+    for name in ("cp", "tc", "ts"):
+        if name not in active or target_params is None:
+            continue
         tuned = tune_hidden_dim(
             builders[name],
             target_params,
@@ -119,9 +131,10 @@ def prepare_hidden_dims(args, device: torch.device) -> Dict[str, int]:
             device=cpu,
         )
         hidden_dims[name] = tuned
-    if args.verbose:
+    if args.verbose and target_params is not None:
         print("Parameter targets:", target_params)
-        for k, h in hidden_dims.items():
+        for k in active:
+            h = hidden_dims[k]
             params = count_parameters(builders[k](args.channel_size, h, 2, cpu))
             print(f"{k.upper()} hidden={h} params={params}")
     return hidden_dims
@@ -149,6 +162,9 @@ def main():
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
+    if args.delay_T_delta <= 0:
+        raise ValueError("delay_T_delta must be positive")
+
     set_seed(args.seed)
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
 
@@ -159,7 +175,7 @@ def main():
     delays = list(range(0, args.delay_T + 1, args.delay_T_delta))
     model_names = [args.model] if args.model != "all" else ["dh", "cp", "tc", "ts"]
 
-    hidden_dims = prepare_hidden_dims(args, device)
+    hidden_dims = prepare_hidden_dims(args, device, model_names)
 
     results: Dict[str, List[Tuple[int, float]]] = {name: [] for name in model_names}
 

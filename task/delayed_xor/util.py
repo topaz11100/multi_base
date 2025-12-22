@@ -138,3 +138,11 @@ def tune_hidden_dim(
             best_dim = dim
             break
     return best_dim
+
+
+def apply_masks(model: torch.nn.Module) -> None:
+    """Re-apply any sparsity masks defined on the model's submodules."""
+    with torch.no_grad():
+        for module in model.modules():
+            if hasattr(module, "apply_mask") and callable(getattr(module, "apply_mask")):
+                module.apply_mask()
