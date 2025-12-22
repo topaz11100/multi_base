@@ -15,6 +15,7 @@ from neurons.DH_SNN_neuron import (
     spike_dense_test_denri_wotanh_R,
     spike_rnn_test_denri_wotanh_R,
 )
+from neurons import surrogate  # [유지] surrogate 모듈 임포트
 
 
 @dataclass
@@ -40,8 +41,11 @@ class FeedForwardNet(nn.Module):
         self.readout = nn.Linear(prev_dim, out_dim)
         self.readout_mode = readout_mode
 
+    # [유지] RecursionError 방지 코드
     def reset_state(self):
         for m in self.modules():
+            if m is self:
+                continue
             if hasattr(m, "reset_state"):
                 try:
                     m.reset_state()
@@ -238,9 +242,18 @@ def build_model(neuron_name: str, cfg: ModelConfig, neuron_kwargs: Dict) -> nn.M
         if name == "cp":
             ctor = lambda shape: CP_LIF(shape, **neuron_kwargs.get("cp", {}))
         elif name == "tc":
-            ctor = lambda shape: TCLIFNode(**neuron_kwargs.get("tc", {}), detach_reset=False)
+            # [수정] partial 제거, surrogate.Triangle.apply 직접 할당
+            kwargs = neuron_kwargs.get("tc", {}).copy()
+            if "surrogate_function" not in kwargs:
+                kwargs["surrogate_function"] = surrogate.Triangle.apply 
+            ctor = lambda shape: TCLIFNode(**kwargs, detach_reset=False)
         else:
-            ctor = lambda shape: TSLIFNode(**neuron_kwargs.get("ts", {}), detach_reset=False)
+            # [수정] partial 제거, surrogate.Triangle.apply 직접 할당
+            kwargs = neuron_kwargs.get("ts", {}).copy()
+            if "surrogate_function" not in kwargs:
+                kwargs["surrogate_function"] = surrogate.Triangle.apply
+            ctor = lambda shape: TSLIFNode(**kwargs, detach_reset=False)
+            
         if cfg.arch == "ff":
             return FeedForwardNet(cfg.in_dim, cfg.hidden_dims, cfg.out_dim, ctor, readout_mode)
         return SimpleSRNN(cfg.in_dim, cfg.hidden_dims, cfg.out_dim, ctor, readout_mode)

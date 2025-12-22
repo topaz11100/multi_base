@@ -13,6 +13,8 @@ from neurons.DH_SNN_neuron import (
     spike_dense_test_denri_wotanh_R,
     spike_rnn_test_denri_wotanh_R,
 )
+# [수정] surrogate 모듈 임포트
+from neurons import surrogate
 
 
 class FeedForwardSNN(nn.Module):
@@ -26,7 +28,8 @@ class FeedForwardSNN(nn.Module):
         self.readout_mode = readout_mode
         self.warmup_steps = warmup_steps
 
-    def reset_state(self):
+    # [수정] reset_state에 batch_size 인자 추가 (기본값 None)
+    def reset_state(self, batch_size: int = None):
         for neuron in [self.neuron1, self.neuron2]:
             if hasattr(neuron, "reset_state"):
                 neuron.reset_state()
@@ -170,6 +173,9 @@ def build_model(model_name: str, args) -> nn.Module:
         neuron_cls = {"cp": CP_LIF, "tc": partial(TCLIFNode, detach_reset=False), "ts": partial(TSLIFNode, detach_reset=False)}[
             model_name
         ]
+        
+        # [수정] tc와 ts 모델에 surrogate_function을 Triangle로 변경
+        # surrogate.Triangle은 gamma 파라미터를 받으므로 args.surrogate_beta를 gamma로 전달
         neuron_args: Dict = {
             "cp": {
                 "dt": args.dt,
@@ -181,7 +187,8 @@ def build_model(model_name: str, args) -> nn.Module:
             },
             "tc": {
                 "v_threshold": args.threshold,
-                "surrogate_function": None,
+                # 논문에 따라 Triangle 사용 (gamma=1.0 또는 args.surrogate_beta 사용 가능)
+                "surrogate_function": partial(surrogate.Triangle.apply, gamma=1.0), 
                 "hard_reset": args.hard_reset,
                 "detach_reset": False,
                 "decay_factor": torch.tensor([[args.tc_beta1, args.tc_beta2]]),
@@ -189,7 +196,8 @@ def build_model(model_name: str, args) -> nn.Module:
             },
             "ts": {
                 "v_threshold": args.threshold,
-                "surrogate_function": None,
+                # TS-LIF도 동일하게 Triangle 적용 (논문들에서 주로 Triangle 사용)
+                "surrogate_function": partial(surrogate.Triangle.apply, gamma=1.0),
                 "hard_reset": args.hard_reset,
                 "detach_reset": False,
                 "decay_factor": torch.tensor([args.tc_tau_s_low, args.tc_tau_s_high, args.tc_tau_d, args.tc_gamma], dtype=torch.float),

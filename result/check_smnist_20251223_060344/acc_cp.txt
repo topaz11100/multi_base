@@ -1,0 +1,7 @@
+neuron: cp
+param_count: 86282
+hidden_dims: [64, 256, 256]
+best_test_acc: 0.0979999995470047
+best_epoch: 1
+final_test_acc: 0.0979999995470047
+delay: null

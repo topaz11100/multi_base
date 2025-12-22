@@ -15,15 +15,7 @@ echo "========================================================"
 echo "Starting Quick Check for All Tasks and Models"
 echo "========================================================"
 
-# 1. SHD Task
-# models: cp, tc, ts, dh_sfnn, dh_srnn (Note: SHD uses underscores)
-echo "1. Running SHD Check..."
-"${PYTHON_BIN}" task/SHD/run.py \
-    --exp_name check_shd \
-    --epochs 1 \
-    --batch_size 4 \
-    --models cp tc ts dh_sfnn dh_srnn \
-    --data_root "${SHD_DATA_ROOT}"
+
 
 
 # 2. S-MNIST Task
@@ -32,8 +24,8 @@ echo "2. Running S-MNIST Check..."
 "${PYTHON_BIN}" task/s-mnist/run.py \
     --exp-name check_smnist \
     --epochs 1 \
-    --batch-size 4 \
-    --neurons cp,tc,ts,dh-sfnn,dh-srnn
+    --batch-size 2048 \
+    --neurons tc,ts,dh-sfnn,dh-srnn
 
 
 # 3. Delayed XOR Task
@@ -67,6 +59,15 @@ echo "4. Running Multiscale XOR Check..."
     --delay_step 10 \
     --neurons dh tc ts cp
 
+# 1. SHD Task
+# models: cp, tc, ts, dh_sfnn, dh_srnn (Note: SHD uses underscores)
+echo "1. Running SHD Check..."
+"${PYTHON_BIN}" task/SHD/run.py \
+    --exp_name check_shd \
+    --epochs 1 \
+    --batch_size 4 \
+    --models cp tc ts dh_sfnn dh_srnn \
+    --data_root "${SHD_DATA_ROOT}"
 
 # 5. SSC Task
 # neurons: cp, tc, ts, dh-sfnn, dh-srnn (Note: SSC uses hyphens)
