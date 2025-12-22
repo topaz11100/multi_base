@@ -128,7 +128,7 @@ def tune_hidden_dim(
     best_dim = base_hidden
     best_gap = float("inf")
     for dim in search:
-        model = builder(input_dim, dim, output_dim, device=device)
+        model = builder(input_dim, dim, output_dim, device)
         params = count_parameters(model)
         gap = abs(params - target_params)
         if gap < best_gap:
