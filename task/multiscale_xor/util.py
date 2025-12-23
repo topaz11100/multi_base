@@ -16,7 +16,8 @@ def set_seed(seed: int, deterministic: bool = True) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
     if deterministic:
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
@@ -37,19 +38,19 @@ def save_json(path: Path, obj: Mapping) -> None:
     path.write_text(json.dumps(obj, indent=2), encoding="utf-8")
 
 
-def plot_single(neuron_name: str, delays: Iterable[int], accs: Iterable[float], save_path_png: Path) -> None:
+def plot_single(neuron_name: str, x_list: Iterable[int], y_list: Iterable[float], out_path: Path) -> None:
     plt.figure(dpi=200)
-    plt.plot(list(delays), list(accs), marker="o")
+    plt.plot(list(x_list), list(y_list), marker="o")
     plt.xlabel("delay (start_time)")
     plt.ylabel("accuracy")
     plt.title(f"{neuron_name.upper()} multiscale XOR")
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig(save_path_png)
+    plt.savefig(out_path)
     plt.close()
 
 
-def plot_overlay(neuron_to_accs: Dict[str, Iterable[float]], delays: Iterable[int], save_path_png: Path) -> None:
+def plot_overlay(neuron_to_accs: Dict[str, Iterable[float]], delays: Iterable[int], out_path: Path) -> None:
     plt.figure(dpi=200)
     x = list(delays)
     for neuron, accs in neuron_to_accs.items():
@@ -60,7 +61,7 @@ def plot_overlay(neuron_to_accs: Dict[str, Iterable[float]], delays: Iterable[in
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig(save_path_png)
+    plt.savefig(out_path)
     plt.close()
 
 
