@@ -13,32 +13,54 @@ from util import count_parameters
 
 
 class Model_DH(nn.Module):
-    def __init__(self, input_dim: int, hidden_dim: int, output_dim: int, device: torch.device):
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dim: int,
+        output_dim: int,
+        device: torch.device,
+        *,
+        dh_branches: int = 1,
+        dh_readout: str = "linear",
+    ):
         super().__init__()
         self.device = device
+        # Delayed XOR in DH-SNN paper uses 1 dendritic branch for simplicity -> default=1
         self.dense_1 = spike_dense_test_denri_wotanh_R(
             input_dim,
             hidden_dim,
             tau_minitializer="uniform",
             low_m=0,
             high_m=4,
-            branch=1,
+            branch=dh_branches,
             vth=1,
             dt=1,
             device=device,
             bias=True,
         )
-        self.dense_2 = readout_integrator_test(hidden_dim, output_dim, dt=1, device=device, bias=True)
+        self.readout_type = dh_readout
+        if dh_readout == "linear":
+            self.dense_2 = nn.Linear(hidden_dim, output_dim, bias=True)
+        elif dh_readout == "integrator":
+            self.dense_2 = readout_integrator_test(
+                hidden_dim, output_dim, dt=1, device=device, bias=True
+            )
+        else:
+            raise ValueError(f"Unknown dh_readout: {dh_readout}")
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch_size, time_steps, _ = x.shape
         self.dense_1.set_neuron_state(batch_size)
-        self.dense_2.set_neuron_state(batch_size)
+        if self.readout_type == "integrator":
+            self.dense_2.set_neuron_state(batch_size)
 
         outputs = []
         for t in range(time_steps):
-            mem1, spike1 = self.dense_1(x[:, t, :])
-            mem2 = self.dense_2(spike1)
+            _, spike1 = self.dense_1(x[:, t, :])
+            if self.readout_type == "integrator":
+                mem2 = self.dense_2(spike1)
+            else:
+                mem2 = self.dense_2(spike1)
             outputs.append(mem2.unsqueeze(1))
         return torch.cat(outputs, dim=1)
 
@@ -120,10 +142,17 @@ class Model_TS(_FeedForwardLIF):
         return torch.stack(spikes, dim=0)
 
 
-def get_model(model_name: str, input_dim: int, hidden_dim: int, output_dim: int, device: torch.device) -> nn.Module:
+def get_model(
+    model_name: str,
+    input_dim: int,
+    hidden_dim: int,
+    output_dim: int,
+    device: torch.device,
+    **kwargs,
+) -> nn.Module:
     key = model_name.lower()
     if key == "dh":
-        return Model_DH(input_dim, hidden_dim, output_dim, device).to(device)
+        return Model_DH(input_dim, hidden_dim, output_dim, device, **kwargs).to(device)
     if key == "cp":
         return Model_CP(input_dim, hidden_dim, output_dim, device).to(device)
     if key == "tc":

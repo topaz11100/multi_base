@@ -1,3 +1,7 @@
+import matplotlib
+
+matplotlib.use("Agg")
+
 import os
 import random
 from dataclasses import dataclass
@@ -140,9 +144,16 @@ def tune_hidden_dim(
     return best_dim
 
 
-def apply_masks(model: torch.nn.Module) -> None:
+def collect_mask_modules(model: torch.nn.Module) -> List[torch.nn.Module]:
+    return [
+        module
+        for module in model.modules()
+        if hasattr(module, "apply_mask") and callable(getattr(module, "apply_mask"))
+    ]
+
+
+def apply_masks(mask_modules: List[torch.nn.Module]) -> None:
     """Re-apply any sparsity masks defined on the model's submodules."""
     with torch.no_grad():
-        for module in model.modules():
-            if hasattr(module, "apply_mask") and callable(getattr(module, "apply_mask")):
-                module.apply_mask()
+        for module in mask_modules:
+            module.apply_mask()

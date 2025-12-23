@@ -5,6 +5,7 @@ from typing import Dict, List, Tuple
 
 import torch
 import torch.nn.functional as F
+from torch.cuda.amp import GradScaler, autocast
 from torch.optim import Adam
 from tqdm import tqdm
 
@@ -17,6 +18,7 @@ from model import get_model
 from util import (
     SaveManager,
     apply_masks,
+    collect_mask_modules,
     count_parameters,
     dry_run,
     format_settings,
@@ -42,12 +44,26 @@ def train_one_delay(
     delay: int,
     args,
     device: torch.device,
+    *,
+    amp_enabled: bool,
 ) -> Tuple[float, int]:
-    model = get_model(model_name, args.channel_size, hidden_dim, 2, device)
-    apply_masks(model)
+    model = get_model(
+        model_name,
+        args.channel_size,
+        hidden_dim,
+        2,
+        device,
+        dh_branches=args.dh_branches,
+        dh_readout=args.dh_readout,
+    )
+    mask_modules = collect_mask_modules(model)
+    apply_masks(mask_modules)
     optimizer = Adam(model.parameters(), lr=args.lr)
+    scaler = GradScaler(enabled=amp_enabled)
 
     time_steps = args.time_steps or (delay + args.coding_time * 2 + args.tail_time)
+    generator = torch.Generator(device=device)
+    generator.manual_seed(torch.initial_seed())
 
     if args.dry_run and args.verbose:
         batch = generate_batch(
@@ -57,8 +73,11 @@ def train_one_delay(
             channel_size=args.channel_size,
             coding_time=args.coding_time,
             noise_rate=args.noise_rate,
+            device=device,
+            generator=generator,
+            target_mode=args.target_mode,
         )[0]
-        dry_run(model, batch.to(device))
+        dry_run(model, batch)
 
     for epoch in tqdm(range(args.epochs), desc=f"{model_name.upper()} Delay={delay}"):
         for _ in range(args.steps_per_epoch):
@@ -69,14 +88,22 @@ def train_one_delay(
                 channel_size=args.channel_size,
                 coding_time=args.coding_time,
                 noise_rate=args.noise_rate,
+                device=device,
+                generator=generator,
+                target_mode=args.target_mode,
             )
-            data, target, mask = data.to(device), target.to(device), mask.to(device)
-            optimizer.zero_grad()
-            logits = model(data)
-            loss, _ = compute_loss_and_acc(logits, target, mask)
-            loss.backward()
-            optimizer.step()
-            apply_masks(model)
+            optimizer.zero_grad(set_to_none=True)
+            with autocast(device_type=device.type, enabled=amp_enabled):
+                logits = model(data)
+                loss, _ = compute_loss_and_acc(logits, target, mask)
+            if amp_enabled:
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                loss.backward()
+                optimizer.step()
+            apply_masks(mask_modules)
 
     acc_sum = 0.0
     eval_batches = 0
@@ -89,9 +116,12 @@ def train_one_delay(
                 channel_size=args.channel_size,
                 coding_time=args.coding_time,
                 noise_rate=args.noise_rate,
+                device=device,
+                generator=generator,
+                target_mode=args.target_mode,
             )
-            data, target, mask = data.to(device), target.to(device), mask.to(device)
-            logits = model(data)
+            with autocast(device_type=device.type, enabled=amp_enabled):
+                logits = model(data)
             _, acc = compute_loss_and_acc(logits, target, mask)
             acc_sum += acc
             eval_batches += 1
@@ -104,7 +134,15 @@ def prepare_hidden_dims(args, device: torch.device, model_names: List[str]) -> D
     cpu = torch.device("cpu")
 
     builders = {
-        "dh": lambda in_d, h, out_d, dev: get_model("dh", in_d, h, out_d, dev),
+        "dh": lambda in_d, h, out_d, dev: get_model(
+            "dh",
+            in_d,
+            h,
+            out_d,
+            dev,
+            dh_branches=args.dh_branches,
+            dh_readout=args.dh_readout,
+        ),
         "cp": lambda in_d, h, out_d, dev: get_model("cp", in_d, h, out_d, dev),
         "tc": lambda in_d, h, out_d, dev: get_model("tc", in_d, h, out_d, dev),
         "ts": lambda in_d, h, out_d, dev: get_model("ts", in_d, h, out_d, dev),
@@ -117,7 +155,17 @@ def prepare_hidden_dims(args, device: torch.device, model_names: List[str]) -> D
 
     target_params = None
     if any(name in active for name in ("cp", "tc", "ts")):
-        target_params = count_parameters(get_model("dh", args.channel_size, base_hidden, 2, cpu))
+        target_params = count_parameters(
+            get_model(
+                "dh",
+                args.channel_size,
+                base_hidden,
+                2,
+                cpu,
+                dh_branches=args.dh_branches,
+                dh_readout=args.dh_readout,
+            )
+        )
 
     for name in ("cp", "tc", "ts"):
         if name not in active or target_params is None:
@@ -158,6 +206,16 @@ def main():
     parser.add_argument("--noise_rate", type=float, default=0.01)
     parser.add_argument("--tail_time", type=int, default=2)
     parser.add_argument("--time_steps", type=int, default=None)
+    parser.add_argument(
+        "--target_mode",
+        choices=["after_cue", "last_step"],
+        default="last_step",
+        help="last_step matches DH-SNN delayed XOR evaluation; after_cue averages after cue",
+    )
+    parser.add_argument("--dh_branches", type=int, default=1)
+    parser.add_argument("--dh_readout", choices=["linear", "integrator"], default="linear")
+    parser.add_argument("--amp", action="store_true", help="Force enable AMP")
+    parser.add_argument("--no-amp", action="store_true", help="Disable AMP even on CUDA")
     parser.add_argument("--dry_run", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
@@ -167,6 +225,17 @@ def main():
 
     set_seed(args.seed)
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+    if device.type == "cuda":
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.set_float32_matmul_precision("high")
+    if args.no_amp:
+        amp_enabled = False
+    elif args.amp:
+        amp_enabled = True
+    else:
+        amp_enabled = device.type == "cuda"
 
     save_mgr = SaveManager(root=str(ROOT / "result"))
     save_mgr.log_settings(format_settings(args))
@@ -181,7 +250,9 @@ def main():
 
     for model_name in model_names:
         for delay in delays:
-            acc, params = train_one_delay(model_name, hidden_dims[model_name], delay, args, device)
+            acc, params = train_one_delay(
+                model_name, hidden_dims[model_name], delay, args, device, amp_enabled=amp_enabled
+            )
             results[model_name].append((delay, acc))
             save_mgr.append_log(model_name, f"delay={delay}, acc={acc:.4f}, params={params}")
         save_mgr.save_plot(model_name, results[model_name])
