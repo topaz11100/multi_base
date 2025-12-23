@@ -2,10 +2,10 @@ import argparse
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
+from contextlib import nullcontext
 
 import torch
 import torch.nn.functional as F
-from torch.cuda.amp import GradScaler, autocast
 from torch.optim import Adam
 from tqdm import tqdm
 
@@ -38,6 +38,42 @@ def compute_loss_and_acc(logits: torch.Tensor, targets: torch.Tensor, mask: torc
     return loss, acc
 
 
+_amp_cpu_warning_shown = False
+
+
+def _should_enable_amp(device: torch.device, enabled: bool) -> bool:
+    global _amp_cpu_warning_shown
+    if not enabled:
+        return False
+    if device.type != "cuda":
+        if not _amp_cpu_warning_shown:
+            print("AMP requested but CUDA not available; running without AMP.")
+            _amp_cpu_warning_shown = True
+        return False
+    return True
+
+
+def autocast_context(device: torch.device, enabled: bool):
+    """Return an autocast context manager compatible with torch 1.x and 2.x."""
+
+    active = _should_enable_amp(device, enabled)
+    if not active:
+        return nullcontext()
+
+    amp_mod = getattr(torch, "amp", None)
+    if amp_mod is not None and hasattr(amp_mod, "autocast"):
+        return amp_mod.autocast(device_type="cuda", enabled=True)
+    return torch.cuda.amp.autocast(enabled=True)
+
+
+def make_grad_scaler(device: torch.device, enabled: bool):
+    active = _should_enable_amp(device, enabled)
+    amp_mod = getattr(torch, "amp", None)
+    if amp_mod is not None and hasattr(amp_mod, "GradScaler"):
+        return amp_mod.GradScaler("cuda", enabled=active)
+    return torch.cuda.amp.GradScaler(enabled=active)
+
+
 def train_one_delay(
     model_name: str,
     hidden_dim: int,
@@ -59,7 +95,8 @@ def train_one_delay(
     mask_modules = collect_mask_modules(model)
     apply_masks(mask_modules)
     optimizer = Adam(model.parameters(), lr=args.lr)
-    scaler = GradScaler(enabled=amp_enabled)
+    amp_enabled = _should_enable_amp(device, amp_enabled)
+    scaler = make_grad_scaler(device, amp_enabled)
 
     time_steps = args.time_steps or (delay + args.coding_time * 2 + args.tail_time)
     generator = torch.Generator(device=device)
@@ -93,7 +130,7 @@ def train_one_delay(
                 target_mode=args.target_mode,
             )
             optimizer.zero_grad(set_to_none=True)
-            with autocast(device_type=device.type, enabled=amp_enabled):
+            with autocast_context(device, amp_enabled):
                 logits = model(data)
                 loss, _ = compute_loss_and_acc(logits, target, mask)
             if amp_enabled:
@@ -120,7 +157,7 @@ def train_one_delay(
                 generator=generator,
                 target_mode=args.target_mode,
             )
-            with autocast(device_type=device.type, enabled=amp_enabled):
+            with autocast_context(device, amp_enabled):
                 logits = model(data)
             _, acc = compute_loss_and_acc(logits, target, mask)
             acc_sum += acc
