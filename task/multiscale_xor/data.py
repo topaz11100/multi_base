@@ -90,10 +90,11 @@ def generate_batch(
 def make_eval_mask(time_steps: int, coding_time: int, remain_time: int, delay: int) -> torch.Tensor:
     """Create a boolean mask selecting evaluation steps.
 
-    A step contributes to loss/accuracy if ``t > delay`` and the step lies in the
-    active portion of a cycle (beyond the ``remain_time`` gap).
+    A step contributes to loss/accuracy if ``t >= delay`` and the step lies in the
+    active portion of a cycle (``coding_time`` active followed by ``remain_time`` rest).
     """
     t = torch.arange(time_steps)
-    after_delay = t > delay
-    in_active = (t - delay) % (coding_time + remain_time) > remain_time
-    return (after_delay & in_active)
+    after_delay = t >= delay
+    cycle_offset = (t - delay) % (coding_time + remain_time)
+    in_active = cycle_offset < coding_time
+    return after_delay & in_active

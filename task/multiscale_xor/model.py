@@ -27,13 +27,13 @@ class _TimeLoopModel(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch_size, time_steps, _ = x.shape
-        outputs = []
+        outputs = torch.empty(batch_size, time_steps, self.fc_out.out_features, device=x.device)
         self.reset_state(batch_size)
         for t in range(time_steps):
             h = self.fc_in(x[:, t, :])
             s = self.neuron_forward(h)
-            outputs.append(self.fc_out(s).unsqueeze(1))
-        return torch.cat(outputs, dim=1)
+            outputs[:, t, :] = self.fc_out(s)
+        return outputs
 
 
 class DHModel(nn.Module):
@@ -54,16 +54,20 @@ class DHModel(nn.Module):
         )
         self.dense_2 = readout_integrator_test(hidden_dim, output_dim, dt=1, device=device, bias=True)
 
+    def apply_connection_mask(self) -> None:
+        self.dense_1.apply_mask()
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch_size, time_steps, _ = x.shape
+        self.apply_connection_mask()
         self.dense_1.set_neuron_state(batch_size)
         self.dense_2.set_neuron_state(batch_size)
-        outputs = []
+        outputs = torch.empty(batch_size, time_steps, self.dense_2.output_dim, device=x.device)
         for t in range(time_steps):
             mem1, spike1 = self.dense_1(x[:, t, :])
             mem2 = self.dense_2(spike1)
-            outputs.append(mem2.unsqueeze(1))
-        return torch.cat(outputs, dim=1)
+            outputs[:, t, :] = mem2
+        return outputs
 
 
 class CPModel(_TimeLoopModel):
@@ -117,7 +121,7 @@ def build_model(neuron_name: str, input_dim: int, hidden_dim: int, output_dim: i
 
     if key == "dh":
         # Ensure the DH branch connectivity mask is applied before any training steps
-        model.dense_1.apply_mask()
+        model.apply_connection_mask()
 
         # Register a single gradient hook to zero gradients outside the mask
         if not getattr(model.dense_1, "_dh_mask_hooked", False):

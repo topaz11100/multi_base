@@ -1,4 +1,8 @@
-"""Run multiscale XOR experiments comparing four neuron models."""
+"""Run multiscale XOR experiments comparing four neuron models.
+
+Example (defaults match the paper configuration):
+    python run.py --device cuda
+"""
 from __future__ import annotations
 
 import argparse
@@ -90,14 +94,14 @@ def select_hidden_dims(
         if name == "dh":
             continue
         tuned_hidden, tuned_params = tune_hidden_dim(
-            lambda inp, hid, out, dev=device: builders[name](inp, hid, out, dev),
+            lambda inp, hid, out, dev=cpu_device: builders[name](inp, hid, out, dev),
             target_params,
             input_dim,
             output_dim,
             base_hidden,
             search=search_space,
             tolerance=tolerance,
-            device=device,
+            device=cpu_device,
         )
         hidden_dims[name] = (tuned_hidden, tuned_params)
     return hidden_dims
@@ -117,6 +121,7 @@ def train_and_evaluate(
     scheduler = StepLR(optimizer, step_size=args.lr_step, gamma=args.lr_gamma)
 
     mask = eval_mask.to(device)
+    enforce_structural_masks(model)
     for epoch in tqdm(range(args.epochs), desc=f"{neuron.upper()} delay={delay} train"):
         for _ in range(args.log_interval):
             x, y = generate_batch(
@@ -131,21 +136,20 @@ def train_and_evaluate(
                 noise_rate=args.noise_rate,
                 device=device,
             )
-            x, y = x.to(device), y.to(device)
-            optimizer.zero_grad()
+            mask_bt = mask.unsqueeze(0).expand(x.size(0), -1)
+            enforce_structural_masks(model)
+            optimizer.zero_grad(set_to_none=True)
             logits = model(x)
-            loss, _ = compute_loss_and_acc(logits, y, mask.expand(x.size(0), -1))
+            loss, _ = compute_loss_and_acc(logits, y, mask_bt)
             loss.backward()
             if args.clip_grad > 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
             optimizer.step()
-            if neuron == "dh":
-                enforce_structural_masks(model, check=args.dh_mask_check, eps=1e-8)
+            enforce_structural_masks(model, check=args.dh_mask_check, eps=1e-8)
         scheduler.step()
 
     acc_sum = 0.0
-    if neuron == "dh":
-        enforce_structural_masks(model, check=args.dh_mask_check, eps=1e-8)
+    enforce_structural_masks(model, check=args.dh_mask_check, eps=1e-8)
     with torch.no_grad():
         for _ in tqdm(range(args.eval_steps), desc=f"{neuron.upper()} delay={delay} eval"):
             x, y = generate_batch(
@@ -160,9 +164,10 @@ def train_and_evaluate(
                 noise_rate=args.noise_rate,
                 device=device,
             )
-            x, y = x.to(device), y.to(device)
+            mask_bt = mask.unsqueeze(0).expand(x.size(0), -1)
+            enforce_structural_masks(model)
             logits = model(x)
-            _, acc = compute_loss_and_acc(logits, y, mask.expand(x.size(0), -1))
+            _, acc = compute_loss_and_acc(logits, y, mask_bt)
             acc_sum += acc
     return acc_sum / max(1, args.eval_steps)
 
@@ -173,7 +178,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--exp_name", type=str, default="multiscale_xor")
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--trials", type=int, default=1)
+    parser.add_argument("--trials", type=int, default=10)
 
     # Data
     parser.add_argument("--time_steps", type=int, default=100)
@@ -189,7 +194,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--delay_step", type=int, default=10)
 
     # Training
-    parser.add_argument("--epochs", type=int, default=150)
+    parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=500)
     parser.add_argument("--hidden", type=int, default=16)
     parser.add_argument("--lr", type=float, default=1e-2)
