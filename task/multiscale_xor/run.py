@@ -35,6 +35,15 @@ from util import (
     tune_hidden_dim,
 )
 
+PAPER_DEFAULTS = {
+    "high_rate": 0.6,
+    "low_rate": 0.2,
+    "noise_rate": 0.01,
+    "coding_time": 10,
+    "remain_time": 5,
+    "trials": 10,
+}
+
 
 def parse_delay_args(args: argparse.Namespace) -> List[int]:
     if args.delay_list:
@@ -45,11 +54,41 @@ def parse_delay_args(args: argparse.Namespace) -> List[int]:
     return delays
 
 
+def apply_paper_defaults(args: argparse.Namespace) -> None:
+    """Override CLI args with the paper's reported settings."""
+
+    for key, value in PAPER_DEFAULTS.items():
+        current = getattr(args, key, None)
+        if current is None:
+            continue
+        if current != value:
+            print(
+                f"--paper_defaults overriding {key} from {current} to {value}",
+                file=sys.stderr,
+            )
+        setattr(args, key, value)
+
+
 def compute_loss_and_acc(logits: torch.Tensor, targets: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, float]:
-    if mask.sum() == 0:
-        return torch.tensor(0.0, device=logits.device, requires_grad=True), 0.0
-    logits_flat = logits[mask]
-    targets_flat = targets[mask]
+    mask = mask.to(logits.device)
+    if mask.dim() == 1:
+        mask_b = mask.view(1, -1).expand(logits.size(0), -1)
+    elif mask.dim() == 2:
+        mask_b = mask
+    else:
+        raise ValueError(f"Mask must be 1D or 2D, got {mask.dim()} dimensions")
+
+    if mask_b.shape[0] != logits.size(0) or mask_b.shape[1] != logits.size(1):
+        raise ValueError(
+            f"Mask shape {mask_b.shape} is incompatible with logits shape {logits.shape}"
+        )
+
+    active_count = mask_b.sum().item()
+    if active_count == 0:
+        raise ValueError("Evaluation mask selects zero elements; check delay/time configuration")
+
+    logits_flat = logits[mask_b]
+    targets_flat = targets[mask_b]
     loss = F.cross_entropy(logits_flat, targets_flat)
     preds = logits_flat.argmax(dim=1)
     acc = (preds == targets_flat).float().mean().item()
@@ -80,6 +119,7 @@ def select_hidden_dims(
     device: torch.device,
     neuron_kwargs: Dict[str, Dict],
 ) -> Dict[str, Tuple[int, int]]:
+    # Hidden-dim tuning is forced onto CPU to avoid GPU memory spikes.
     cpu_device = torch.device("cpu")
     builders = {
         "dh": lambda inp, hid, out, dev=cpu_device: build_model("dh", inp, hid, out, dev, neuron_kwargs.get("dh", {})),
@@ -121,6 +161,7 @@ def train_and_evaluate(
     scheduler = StepLR(optimizer, step_size=args.lr_step, gamma=args.lr_gamma)
 
     mask = eval_mask.to(device)
+    mask_check = args.dh_mask_check or args.debug_mask
     enforce_structural_masks(model)
     for epoch in tqdm(range(args.epochs), desc=f"{neuron.upper()} delay={delay} train"):
         for _ in range(args.log_interval):
@@ -145,11 +186,11 @@ def train_and_evaluate(
             if args.clip_grad > 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
             optimizer.step()
-            enforce_structural_masks(model, check=args.dh_mask_check, eps=1e-8)
+            enforce_structural_masks(model, check=mask_check, eps=1e-8)
         scheduler.step()
 
     acc_sum = 0.0
-    enforce_structural_masks(model, check=args.dh_mask_check, eps=1e-8)
+    enforce_structural_masks(model, check=mask_check, eps=1e-8)
     with torch.no_grad():
         for _ in tqdm(range(args.eval_steps), desc=f"{neuron.upper()} delay={delay} eval"):
             x, y = generate_batch(
@@ -213,12 +254,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dh_high_m", type=float, default=4.0)
     parser.add_argument("--dh_vth", type=float, default=1.0)
     parser.add_argument("--dh_dt", type=float, default=1.0)
-    parser.add_argument("--dh_mask_check", action="store_true", help="Validate DH masks after each step")
+    parser.add_argument("--dh_mask_check", action="store_true", help="Validate DH masks after each step (deprecated; use --debug_mask)")
+    parser.add_argument("--debug_mask", action="store_true", help="Validate DH masks after each optimizer step")
     parser.add_argument("--tc_gamma", type=float, default=0.5)
     parser.add_argument("--cp_tau_init", type=float, default=0.5)
     parser.add_argument("--ts_gamma", type=float, default=0.5)
+    parser.add_argument("--paper_defaults", action="store_true", help="Use hyperparameters from the paper (rates, noise, timing, trials)")
 
     args = parser.parse_args()
+    if args.paper_defaults:
+        apply_paper_defaults(args)
+        print(
+            "Applied paper defaults: "
+            f"high_rate={args.high_rate}, low_rate={args.low_rate}, noise_rate={args.noise_rate}, "
+            f"coding_time={args.coding_time}, remain_time={args.remain_time}, trials={args.trials}",
+            file=sys.stderr,
+        )
+    args.debug_mask = args.debug_mask or args.dh_mask_check
     args.input_dim = args.channel_size * 2
     return args
 

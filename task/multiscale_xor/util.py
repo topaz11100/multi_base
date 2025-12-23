@@ -7,6 +7,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, Mapping
 
+import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -30,15 +33,22 @@ def make_result_dir(exp_name: str) -> Path:
     return path
 
 
+def _ensure_parent_dir(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+
 def save_text(path: Path, text: str) -> None:
+    _ensure_parent_dir(path)
     path.write_text(text, encoding="utf-8")
 
 
 def save_json(path: Path, obj: Mapping) -> None:
+    _ensure_parent_dir(path)
     path.write_text(json.dumps(obj, indent=2), encoding="utf-8")
 
 
 def plot_single(neuron_name: str, x_list: Iterable[int], y_list: Iterable[float], out_path: Path) -> None:
+    _ensure_parent_dir(out_path)
     plt.figure(dpi=200)
     plt.plot(list(x_list), list(y_list), marker="o")
     plt.xlabel("delay (start_time)")
@@ -46,11 +56,15 @@ def plot_single(neuron_name: str, x_list: Iterable[int], y_list: Iterable[float]
     plt.title(f"{neuron_name.upper()} multiscale XOR")
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig(out_path)
+    try:
+        plt.savefig(out_path)
+    except OSError as exc:  # pragma: no cover - defensive
+        raise OSError(f"Failed to save plot to {out_path}: {exc}")
     plt.close()
 
 
 def plot_overlay(neuron_to_accs: Dict[str, Iterable[float]], delays: Iterable[int], out_path: Path) -> None:
+    _ensure_parent_dir(out_path)
     plt.figure(dpi=200)
     x = list(delays)
     for neuron, accs in neuron_to_accs.items():
@@ -61,7 +75,10 @@ def plot_overlay(neuron_to_accs: Dict[str, Iterable[float]], delays: Iterable[in
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig(out_path)
+    try:
+        plt.savefig(out_path)
+    except OSError as exc:  # pragma: no cover - defensive
+        raise OSError(f"Failed to save plot to {out_path}: {exc}")
     plt.close()
 
 
