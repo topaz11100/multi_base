@@ -92,9 +92,23 @@ def make_eval_mask(time_steps: int, coding_time: int, remain_time: int, delay: i
 
     A step contributes to loss/accuracy if ``t >= delay`` and the step lies in the
     active portion of a cycle (``coding_time`` active followed by ``remain_time`` rest).
+    The mask is validated to ensure at least one active evaluation step exists.
     """
+
+    if delay >= time_steps:
+        raise ValueError("delay must be smaller than time_steps so that evaluation steps exist")
+
+    cycle_len = coding_time + remain_time
+    if cycle_len <= 0:
+        raise ValueError("coding_time + remain_time must be positive")
+
     t = torch.arange(time_steps)
     after_delay = t >= delay
-    cycle_offset = (t - delay) % (coding_time + remain_time)
+    cycle_offset = (t - delay) % cycle_len
     in_active = cycle_offset < coding_time
-    return after_delay & in_active
+    mask = (after_delay & in_active).to(torch.bool)
+
+    if not mask.any():
+        raise ValueError("Evaluation mask is empty; check time_steps, delay, coding_time, and remain_time")
+
+    return mask
