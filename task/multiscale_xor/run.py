@@ -52,6 +52,21 @@ def compute_loss_and_acc(logits: torch.Tensor, targets: torch.Tensor, mask: torc
     return loss, acc
 
 
+def enforce_structural_masks(model: torch.nn.Module, check: bool = False, eps: float = 0.0) -> None:
+    """Reapply any structural masks registered on modules and optionally verify."""
+
+    for module in model.modules():
+        if hasattr(module, "apply_mask"):
+            module.apply_mask()
+            if check:
+                mask = getattr(module, "mask", None)
+                dense = getattr(module, "dense", None)
+                weight = getattr(dense, "weight", None) if dense is not None else None
+                if mask is not None and weight is not None:
+                    max_abs = (weight * (1 - mask)).abs().max().item()
+                    assert max_abs <= max(eps, 0.0), f"Mask violation detected: {max_abs}"
+
+
 def select_hidden_dims(
     neuron_names: Iterable[str],
     input_dim: int,
@@ -124,9 +139,13 @@ def train_and_evaluate(
             if args.clip_grad > 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
             optimizer.step()
+            if neuron == "dh":
+                enforce_structural_masks(model, check=args.dh_mask_check, eps=1e-8)
         scheduler.step()
 
     acc_sum = 0.0
+    if neuron == "dh":
+        enforce_structural_masks(model, check=args.dh_mask_check, eps=1e-8)
     with torch.no_grad():
         for _ in tqdm(range(args.eval_steps), desc=f"{neuron.upper()} delay={delay} eval"):
             x, y = generate_batch(
@@ -189,6 +208,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dh_high_m", type=float, default=4.0)
     parser.add_argument("--dh_vth", type=float, default=1.0)
     parser.add_argument("--dh_dt", type=float, default=1.0)
+    parser.add_argument("--dh_mask_check", action="store_true", help="Validate DH masks after each step")
     parser.add_argument("--tc_gamma", type=float, default=0.5)
     parser.add_argument("--cp_tau_init", type=float, default=0.5)
     parser.add_argument("--ts_gamma", type=float, default=0.5)
