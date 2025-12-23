@@ -113,4 +113,18 @@ def build_model(neuron_name: str, input_dim: int, hidden_dim: int, output_dim: i
     }
     if key not in builders:
         raise ValueError(f"Unknown neuron type: {neuron_name}")
-    return builders[key]().to(device)
+    model = builders[key]().to(device)
+
+    if key == "dh":
+        # Ensure the DH branch connectivity mask is applied before any training steps
+        model.dense_1.apply_mask()
+
+        # Register a single gradient hook to zero gradients outside the mask
+        if not getattr(model.dense_1, "_dh_mask_hooked", False):
+            def _mask_grad_hook(grad: torch.Tensor) -> torch.Tensor:
+                return grad * model.dense_1.mask
+
+            model.dense_1.dense.weight.register_hook(_mask_grad_hook)
+            model.dense_1._dh_mask_hooked = True
+
+    return model
