@@ -1,9 +1,10 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import copy
+
 from abc import abstractmethod
 from typing import Callable
+
 
 class MemoryModule(nn.Module):
     def __init__(self):
@@ -197,6 +198,9 @@ class MemoryModule(nn.Module):
         replica._memories = self._memories.copy()
         return replica
 
+
+
+
 class BaseNode(MemoryModule):
     def __init__(self,
                  v_threshold: float = 1.,
@@ -351,6 +355,4 @@ class TCLIFNode(BaseNode):
         return f"v_threshold={self.v_threshold}, v_reset={self.v_reset}, detach_reset={self.detach_reset}, " \
                f"hard_reset={self.hard_reset}, " \
                f"gamma={self.gamma}, k={self.k}, step_mode={self.step_mode}, backend={self.backend}"
-
-
 
