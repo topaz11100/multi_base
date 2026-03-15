@@ -1,0 +1,15 @@
+이 경로에 paper/ 의 논문 제안 구조 뉴런 부분만 구현 한 코드를 작성
+나중에 이것만 임포트하면 제안구조로만 이뤄진 모델 만들 수 있게
+
+따라서
+
+- LIF_neuron.py               (감쇠계수/임계/리셋은 모두 학습 파라미터로 고정. CLI 인수는 초기값만 지정)
+- TC_LIF_neuron.py            (paper/AAAI_23_TC-LIF A Two-Compartment Spiking Neuron Model for Long-Term Sequential Modelling.pdf 구현, 반드시 저자코드 이용해 논문대로 구현)
+- TS_LIF_neuron.py            (paper/ICLR_25_TS-LIF A TEMPORAL SEGMENT SPIKING NEURON NETWORK FOR TIME SERIES FORECASTING.pdf 구현, 반드시 저자코드 이용해 논문대로 구현)
+- DH_SNN_neuron.py            (paper/nature_comm_24_Temporal dendritic heterogeneity incorporated with spiking neural networks for learning multi-timescale dynamics.pdf 구현, 반드시 저자코드 이용해 논문대로 구현)
+- D_RF_neuron.py              (paper/Dendritic Resonate-and-Fire Neuron for Effective and Efficient Long Sequence Modeling.pdf 구현, 반드시 저자코드 이용해 논문대로 구현)
+- my_DH_SNN_neuron.py         (paper/proposed/my_DH_SNN_neuron.md 구현)
+- my_D_RF_neuron.py           (paper/proposed/my_D_RF_neuron.md 구현)
+- my_R_DH_SNN_neuron.py       (paper/proposed/my_R_DH_SNN_neuron.md 구현)
+
+의 파일이 생성되어야함

@@ -1,0 +1,1 @@
+freq_analysis.md 의 내용대로 각 데이터에 맞춰 구현
