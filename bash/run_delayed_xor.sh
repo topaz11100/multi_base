@@ -15,6 +15,7 @@ RUN_PY="${ROOT_DIR}/src/basic_long_term_mem/delayed_XOR/run.py"
 
 # RESULT_DIR : 실험 결과 저장 루트 (--out_root)
 RESULT_DIR="${RESULT_DIR:-${ROOT_DIR}/result}"
+DATA_DIR="${DATA_DIR:-${ROOT_DIR}/data}"
 
 mkdir -p "${RESULT_DIR}"
 
@@ -34,6 +35,7 @@ SEED="${SEED:-0}"
 
 # MODELS : 실행할 모델 목록 (--models). 공백 구분
 MODELS="${MODELS:-my-dh-snn my-r-dh-snn my-d-rf}"
+HIDDEN="${HIDDEN:-256}"
 
 # EPOCHS : 학습 epoch 수 (--epochs)
 EPOCHS="${EPOCHS:-50}"
@@ -112,6 +114,7 @@ RATE_LOW="${RATE_LOW:-0.2}"
 RATE_HIGH="${RATE_HIGH:-0.6}"
 
 read -r -a MODELS_ARR <<< "${MODELS}"
+read -r -a HIDDEN_ARR <<< "${HIDDEN}"
 
 # Timestamp format must match project spec: YYmmdd_HHMMSS
 TS="$(date +%y%m%d_%H%M%S)"
@@ -127,9 +130,11 @@ CMD=(
     --out_root "${RESULT_DIR}"
     --exp_name "${EXP_NAME}"
     --timestamp "${TS}"
+    --data_root "${DATA_DIR}"
     --gpu "${GPU}"
     --seed "${SEED}"
     --models "${MODELS_ARR[@]}"
+    --hidden "${HIDDEN_ARR[@]}"
     --epochs "${EPOCHS}"
     --soft_mask_epochs "${SOFT_MASK_EPOCHS}"
     --stabilize_epochs "${STABILIZE_EPOCHS}"

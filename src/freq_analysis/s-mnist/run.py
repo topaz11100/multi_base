@@ -11,24 +11,33 @@ from src.common.freq_driver import run_freq_analysis  # noqa: E402
 from src.common.utils import now_timestamp_seoul  # noqa: E402
 
 
-ALLOWED_MODELS = ["my_DH_SNN", "my_R_DH_SNN", "my_D_RF"]
+DEFAULT_MODELS = ["my-dh-snn", "my-r-dh-snn", "my-d-rf"]
+
+
+def _normalize_model_name(name: str) -> str:
+    return str(name).strip().lower().replace("_", "-")
+
+
+def _require_abs_path(name: str, p: str) -> str:
+    out = os.path.abspath(p)
+    if not os.path.isabs(out):
+        raise ValueError(f"{name} must be an absolute path: {p}")
+    return out
 
 
 def main():
     p = argparse.ArgumentParser(description="Frequency analysis experiment: s-MNIST")
 
-    # NOTE: user request -> allow multiple models in one run (python-side loop)
     p.add_argument(
         "--models",
         type=str,
         nargs="+",
-        default=ALLOWED_MODELS,
-        choices=ALLOWED_MODELS,
-        help="one or more models: my_DH_SNN | my_R_DH_SNN | my_D_RF",
+        default=DEFAULT_MODELS,
+        help="one or more model names (e.g., my-dh-snn my-r-dh-snn my-d-rf)",
     )
 
-    p.add_argument("--out_root", type=str, default=os.path.join(PROJ_ROOT, "result"))
-    p.add_argument("--data_root", type=str, default=os.path.join(PROJ_ROOT, "data"))
+    p.add_argument("--out_root", type=str, required=True)
+    p.add_argument("--data_root", type=str, required=True)
     p.add_argument("--hidden", type=int, nargs="+", default=[128], help="hidden layer sizes (e.g., --hidden 128 128)")
     p.add_argument("--epochs", type=int, default=50)
     p.add_argument("--soft_mask_epochs", type=int, default=None, help="stage A epochs (soft mask learning)")
@@ -107,7 +116,9 @@ def main():
     args = p.parse_args()
 
     ts = args.timestamp or now_timestamp_seoul()
-    models = list(args.models)
+    models = [_normalize_model_name(m) for m in args.models]
+    out_root = _require_abs_path("out_root", args.out_root)
+    data_root = _require_abs_path("data_root", args.data_root)
 
     for m in models:
         # If multiple models are requested, ensure unique exp_name per model.
@@ -118,10 +129,10 @@ def main():
         run_freq_analysis(
             dataset="s-mnist",
             model=m,
-            out_root=args.out_root,
+            out_root=out_root,
             exp_name=exp_name_m,
             timestamp=ts,
-            data_root=args.data_root,
+            data_root=data_root,
             hidden=args.hidden,
             epochs=args.epochs,
             soft_mask_epochs=args.soft_mask_epochs,

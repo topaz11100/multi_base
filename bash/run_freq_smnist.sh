@@ -10,8 +10,17 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PYTHON="${PYTHON:-python3}"
 RUN_PY="${ROOT_DIR}/src/freq_analysis/s-mnist/run.py"
 
-RESULT_DIR="${RESULT_DIR:-${ROOT_DIR}/result}"
-DATA_DIR="${DATA_DIR:-${ROOT_DIR}/data}"
+RESULT_DIR="${RESULT_DIR:-}"
+DATA_DIR="${DATA_DIR:-}"
+
+if [[ -z "${RESULT_DIR}" || -z "${DATA_DIR}" ]]; then
+  echo "ERROR: RESULT_DIR and DATA_DIR must be set to absolute paths." >&2
+  exit 1
+fi
+if [[ "${RESULT_DIR}" != /* || "${DATA_DIR}" != /* ]]; then
+  echo "ERROR: RESULT_DIR and DATA_DIR must be absolute paths." >&2
+  exit 1
+fi
 
 mkdir -p "${RESULT_DIR}"
 
@@ -25,7 +34,7 @@ RUN_PREFIX="${RUN_PREFIX:-freq_smnist}"
 SEED="${SEED:-0}"
 
 # models (space-separated)
-MODELS="${MODELS:-my_DH_SNN my_R_DH_SNN my_D_RF}"
+MODELS="${MODELS:-my-dh-snn my-r-dh-snn my-d-rf}"
 
 # network
 HIDDEN="${HIDDEN:-128}"
