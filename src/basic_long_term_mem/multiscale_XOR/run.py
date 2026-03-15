@@ -19,7 +19,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--exp_name", type=str, default=None, help="override experiment name (result folder prefix)")
     p.add_argument("--timestamp", type=str, default=None, help="override YYmmdd_HHMMSS timestamp")
     p.add_argument("--out_root", type=str, default=None)
+    p.add_argument("--data_root", type=str, default=None)
     p.add_argument("--models", nargs="+", default=ALL_MODELS)
+    p.add_argument("--hidden", nargs="*", type=int, default=[256])
 
     # training
     p.add_argument("--epochs", type=int, default=50)
@@ -77,6 +79,7 @@ def main():
         task="multiscale_XOR",
         models=args.models,
         out_root=out_root,
+        data_root=args.data_root or os.path.join(PROJ_ROOT, "data"),
         exp_name=args.exp_name,
         timestamp=args.timestamp,
         seed=args.seed,
@@ -92,6 +95,7 @@ def main():
         weight_decay_dend_soma=args.weight_decay_dend_soma,
         check_every=args.check_every,
         eval_batches=args.eval_batches,
+        hidden=args.hidden,
         S_min=args.S_min,
         S_max=args.S_max,
         th_len=args.th_len,

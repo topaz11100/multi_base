@@ -10,8 +10,17 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PYTHON="${PYTHON:-python3}"
 RUN_PY="${ROOT_DIR}/src/freq_analysis/SHD/run.py"
 
-RESULT_DIR="${RESULT_DIR:-${ROOT_DIR}/result}"
-DATA_DIR="${DATA_DIR:-${ROOT_DIR}/data}"
+RESULT_DIR="${RESULT_DIR:-}"
+DATA_DIR="${DATA_DIR:-}"
+
+if [[ -z "${RESULT_DIR}" || -z "${DATA_DIR}" ]]; then
+  echo "ERROR: RESULT_DIR and DATA_DIR must be set to absolute paths." >&2
+  exit 1
+fi
+if [[ "${RESULT_DIR}" != /* || "${DATA_DIR}" != /* ]]; then
+  echo "ERROR: RESULT_DIR and DATA_DIR must be absolute paths." >&2
+  exit 1
+fi
 
 mkdir -p "${RESULT_DIR}"
 
@@ -24,7 +33,7 @@ GPU="${GPU:-0}"
 RUN_PREFIX="${RUN_PREFIX:-freq_shd}"
 SEED="${SEED:-0}"
 
-MODELS="${MODELS:-my_R_DH_SNN}"
+MODELS="${MODELS:-my-r-dh-snn}"
 
 HIDDEN="${HIDDEN:-32 32 32}"
 EPOCHS="${EPOCHS:-90}"

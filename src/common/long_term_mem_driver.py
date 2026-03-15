@@ -16,6 +16,7 @@ from src.common.model_utils import (
     format_breakdown_table,
     layer_active_param_breakdown,
 )
+from src.common.long_term_mem_dataset import ensure_serial_xor_datasets
 from src.common.plotting import save_hist_line, save_line_plot
 from src.common.snn_builder import SNNConfig, build_layer, _disable_output_spikes_
 from src.common.utils import ensure_dir, get_device, now_timestamp_seoul, save_text, set_seed, derive_branch_from_S_max
@@ -192,31 +193,20 @@ def generate_multiscale_xor_batch(
 # -----------------------------------------------------------------------------
 
 
-class SingleNeuronXOR(nn.Module):
-    def __init__(self, layer: nn.Module):
+class SequenceBinaryXOR(nn.Module):
+    def __init__(self, layers: List[nn.Module]):
         super().__init__()
-        self.layer = layer
+        self.layers = nn.ModuleList(layers)
 
     def forward(self, x_seq: torch.Tensor) -> torch.Tensor:
-        """Return logits sequence (B,T)."""
-        B, T, _ = x_seq.shape
-        # all neuron layers expose reset_state
-        if hasattr(self.layer, "reset_state"):
-            self.layer.reset_state(B, x_seq.device, x_seq.dtype)  # type: ignore[attr-defined]
-
-        logits: List[torch.Tensor] = []
-        for t in range(T):
-            _, sig = self.layer.forward_step(x_seq[:, t], record=True)  # type: ignore[attr-defined]
-            s = sig["soma_state"]
-            # expected shape (B,1)
-            if s.dim() == 2:
-                logits.append(s[:, 0])
-            elif s.dim() == 1:
-                logits.append(s)
-            else:
-                # fallback: average over non-batch dims
-                logits.append(s.view(B, -1).mean(dim=1))
-        return torch.stack(logits, dim=1)
+        h = x_seq
+        for li, layer in enumerate(self.layers):
+            is_last = (li == len(self.layers) - 1)
+            if is_last:
+                _, rec = layer.forward_sequence(h, record=("soma_state",))
+                return rec["soma_state"].squeeze(-1)
+            h = layer.forward_sequence(h, record=False)
+        raise RuntimeError("empty model")
 
     def regularization_loss(self, lambda_ortho: float = 0.0, lambda_s: float = 0.0) -> torch.Tensor:
         # NOTE: s-complexity is defined as a *global* mean over all neurons in the model:
@@ -225,9 +215,10 @@ class SingleNeuronXOR(nn.Module):
         from src.common.model_utils import s_complexity_mean
 
         loss = None
-        if hasattr(self.layer, "regularization_loss"):
-            # Avoid double-counting s: the layer may implement its own lambda_s term.
-            loss = self.layer.regularization_loss(lambda_ortho=lambda_ortho, lambda_s=0.0)  # type: ignore
+        for layer in self.layers:
+            if hasattr(layer, "regularization_loss"):
+                l = layer.regularization_loss(lambda_ortho=lambda_ortho, lambda_s=0.0)  # type: ignore
+                loss = l if loss is None else (loss + l)
         if loss is None:
             loss = torch.zeros((), device=next(self.parameters()).device)
 
@@ -364,40 +355,39 @@ def _save_single_model_distributions(layer: nn.Module, model_dir: str) -> None:
 
 @torch.no_grad()
 def _evaluate_xor(
-    net: SingleNeuronXOR,
-    batch_fn: Callable[[], Tuple[torch.Tensor, torch.Tensor, torch.Tensor]],
+    net: SequenceBinaryXOR,
+    x: torch.Tensor,
+    y: torch.Tensor,
+    mask: torch.Tensor,
     device: torch.device,
-    eval_batches: int,
-    eval_seed: int,
+    eval_batch_size: int,
 ) -> Tuple[float, float]:
     """Return (loss_mean, acc_mean) over masked timesteps."""
     net.eval()
     loss_sum = 0.0
     correct = 0
     count = 0
-
-    # Keep evaluation deterministic without perturbing training RNG
-    dev_idx = device.index if device.index is not None else 0
-    with torch.random.fork_rng(devices=[dev_idx]):
-        torch.manual_seed(int(eval_seed))
-        torch.cuda.manual_seed_all(int(eval_seed))
-
-        for _ in range(int(eval_batches)):
-            x, y, mask = batch_fn()
-            logits = net(x)
-            ls, c, n = _masked_bce_sum_and_correct(logits, y, mask)
-            loss_sum += ls
-            correct += c
-            count += n
+    N = int(x.shape[0])
+    bs = max(1, int(eval_batch_size))
+    for st in range(0, N, bs):
+        xb = x[st:st + bs].to(device)
+        yb = y[st:st + bs].to(device)
+        mb = mask[st:st + bs].to(device)
+        logits = net(xb)
+        ls, c, n = _masked_bce_sum_and_correct(logits, yb, mb)
+        loss_sum += ls
+        correct += c
+        count += n
 
     loss_mean = loss_sum / max(1, count)
     acc_mean = float(correct) / max(1, count)
     return float(loss_mean), float(acc_mean)
 
 
-def _build_single_neuron(
+def _build_sequence_xor_net(
     model_name: str,
     input_dim: int,
+    hidden_dims: Sequence[int],
     branch: int,
     S_min: float,
     S_max: Optional[float],
@@ -405,7 +395,7 @@ def _build_single_neuron(
     v_th: float,
     v_reset: float,
     v_pre: float,
-) -> SingleNeuronXOR:
+) -> SequenceBinaryXOR:
     cfg = SNNConfig(
         model_name=model_name,
         input_dim=input_dim,
@@ -419,11 +409,12 @@ def _build_single_neuron(
         v_reset=v_reset,
         v_pre=v_pre,
     )
-    layer = build_layer(model_name, input_dim, 1, cfg)
-    # Output is read out directly from membrane potential (logits = soma_state).
-    # Disable spiking/reset so logits are not clamped by reset dynamics.
-    _disable_output_spikes_(layer)
-    return SingleNeuronXOR(layer)
+    dims = [input_dim] + list(hidden_dims) + [1]
+    layers: List[nn.Module] = []
+    for i in range(len(dims) - 1):
+        layers.append(build_layer(model_name, dims[i], dims[i + 1], cfg))
+    _disable_output_spikes_(layers[-1])
+    return SequenceBinaryXOR(layers)
 
 
 # -----------------------------------------------------------------------------
@@ -435,6 +426,7 @@ def run_long_term_mem_xor(
     task: str,
     models: Sequence[str],
     out_root: str,
+    data_root: str,
     seed: int,
     device: str = "auto",
     # optimizer / schedule
@@ -449,6 +441,7 @@ def run_long_term_mem_xor(
     weight_decay_dend_soma: Optional[float] = None,
     check_every: int = 1,
     eval_batches: int = 20,
+    hidden: Sequence[int] = (256,),
     # neuron structure
     S_min: float = 1.0,
     S_max: float = 8.0,
@@ -476,10 +469,7 @@ def run_long_term_mem_xor(
     exp_name: Optional[str] = None,
     timestamp: Optional[str] = None,
 ) -> str:
-    """Run long-term memory XOR experiments for single-neuron models.
-
-    task: "delayed_XOR" or "multiscale_XOR"
-    """
+    """Run long-term memory XOR experiments with fixed serial datasets."""
     if v_reset is None:
         v_reset = float(v_th)
 
@@ -533,6 +523,7 @@ def run_long_term_mem_xor(
     )
     hp_lines.append(f"check_every={check_every}")
     hp_lines.append(f"eval_batches={eval_batches}")
+    hp_lines.append(f"hidden={list(hidden)}")
     hp_lines.append("")
     hp_lines.append(f"S_max={S_max} -> branch={branch} (derived)")
     hp_lines.append(f"S_min={S_min}")
@@ -565,6 +556,18 @@ def run_long_term_mem_xor(
 
     save_text(os.path.join(out_dir, "hyperparams.txt"), "\n".join(hp_lines) + "\n")
 
+    ds_paths = ensure_serial_xor_datasets(
+        data_root_abs=data_root,
+        seed=int(seed),
+        p_low=float(rate_low),
+        p_high=float(rate_high),
+        p_noise=float(noise_rate),
+        Ls=int(delayed_coding_time if task == "delayed_XOR" else multi_coding_time),
+        Ld=max(1, int(delayed_time_steps - 2 * delayed_coding_time)),
+        Lg=int(multi_remain_time),
+        K=max(1, int((multi_time_steps - multi_start_time) // max(1, (multi_coding_time + multi_remain_time)))),
+    )
+
     # model structure + active parameter breakdown
     param_report_lines: List[str] = []
     param_report_lines.append(f"experiment: {exp_name_final}")
@@ -580,48 +583,47 @@ def run_long_term_mem_xor(
     results_lines.append(f"task: {task}")
     results_lines.append("")
 
-    # task-specific batch factory
+    def _load_delayed(split: str):
+        z = np.load(ds_paths[f"delayed_{split}"])
+        x = torch.from_numpy(z["x"].astype(np.float32)).repeat(1, 1, int(delayed_channel_size))
+        y = torch.zeros((x.shape[0], x.shape[1]), dtype=torch.float32)
+        m = torch.zeros((x.shape[0], x.shape[1]), dtype=torch.bool)
+        idx = torch.from_numpy(z["eval_idx"].astype(np.int64))
+        lbl = torch.from_numpy(z["y"].astype(np.float32))
+        y[torch.arange(x.shape[0]), idx] = lbl
+        m[torch.arange(x.shape[0]), idx] = True
+        return x, y, m
+
+    def _load_multi(split: str):
+        z = np.load(ds_paths[f"multi_{split}"])
+        base = torch.from_numpy(z["x"].astype(np.float32)).repeat(1, 1, int(multi_channel_size))
+        x = torch.cat([base, base], dim=2)
+        y = torch.zeros((x.shape[0], x.shape[1]), dtype=torch.float32)
+        m = torch.zeros((x.shape[0], x.shape[1]), dtype=torch.bool)
+        qidx = torch.from_numpy(z["query_eval_idx"].astype(np.int64))
+        yseq = torch.from_numpy(z["y_seq"].astype(np.float32))
+        bi = torch.arange(x.shape[0]).unsqueeze(1).expand_as(qidx)
+        y[bi, qidx] = yseq
+        m[bi, qidx] = True
+        return x, y, m
+
     if task == "delayed_XOR":
         input_dim = int(delayed_channel_size)
-        def make_batch() -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-            return generate_delayed_xor_batch(
-                batch_size=batch_size,
-                time_steps=delayed_time_steps,
-                channel_size=delayed_channel_size,
-                coding_time=delayed_coding_time,
-                test_time=delayed_test_time,
-                noise_rate=noise_rate,
-                rate_low=rate_low,
-                rate_high=rate_high,
-                device=dev,
-            )
+        train_x, train_y, train_m = _load_delayed("train")
+        test_x, test_y, test_m = _load_delayed("test")
     else:
         input_dim = int(multi_channel_size) * 2
-        def make_batch() -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-            return generate_multiscale_xor_batch(
-                batch_size=batch_size,
-                time_steps=multi_time_steps,
-                channel_size=multi_channel_size,
-                coding_time=multi_coding_time,
-                remain_time=multi_remain_time,
-                start_time=multi_start_time,
-                noise_rate=noise_rate,
-                rate_low=rate_low,
-                rate_high=rate_high,
-                device=dev,
-            )
-
-    # deterministic eval seeds
-    train_eval_seed = int(seed) + 10_000
-    test_eval_seed = int(seed) + 20_000
+        train_x, train_y, train_m = _load_multi("train")
+        test_x, test_y, test_m = _load_multi("test")
 
     for mname in models:
         model_dir = ensure_dir(os.path.join(out_dir, mname))
         S_max_eff = float(S_max)
 
-        net = _build_single_neuron(
+        net = _build_sequence_xor_net(
             model_name=mname,
             input_dim=input_dim,
+            hidden_dims=hidden,
             branch=branch,
             S_min=S_min,
             S_max=S_max_eff,
@@ -635,10 +637,11 @@ def run_long_term_mem_xor(
         param_report_lines.append(f"[{mname}] model_structure")
         param_report_lines.append(f"  {input_dim} -> 1")
         try:
-            bd_layer = layer_active_param_breakdown(net.layer)  # type: ignore[attr-defined]
-            param_report_lines.append(f"[{mname}] layer1 initial_active_param_breakdown")
-            param_report_lines.append(format_breakdown_table(bd_layer, prefix="  "))
-            param_report_lines.append(f"[{mname}] initial_total_active_params = {sum(bd_layer.values())}")
+            all_bd = [layer_active_param_breakdown(layer) for layer in net.layers]
+            for li, bd_layer in enumerate(all_bd, start=1):
+                param_report_lines.append(f"[{mname}] layer{li} initial_active_param_breakdown")
+                param_report_lines.append(format_breakdown_table(bd_layer, prefix="  "))
+            param_report_lines.append(f"[{mname}] initial_total_active_params = {sum(sum(b.values()) for b in all_bd)}")
         except Exception as e:
             param_report_lines.append(f"[{mname}] breakdown_error: {type(e).__name__}: {e}")
         param_report_lines.append("")
@@ -679,7 +682,10 @@ def run_long_term_mem_xor(
                 harden_variable_branches_(net)
             net.train()
             for _ in range(int(steps_per_epoch)):
-                x, y, mask = make_batch()
+                idx = torch.randint(0, train_x.shape[0], (int(batch_size),))
+                x = train_x[idx].to(dev)
+                y = train_y[idx].to(dev)
+                mask = train_m[idx].to(dev)
                 opt.zero_grad(set_to_none=True)
                 logits = net(x)
                 loss = _masked_bce_loss(logits, y, mask)
@@ -688,12 +694,8 @@ def run_long_term_mem_xor(
                 opt.step()
 
             if check_every > 0 and (epoch % int(check_every) == 0 or epoch == 1 or epoch == int(total_e)):
-                tr_loss, tr_acc = _evaluate_xor(
-                    net, make_batch, dev, eval_batches=int(eval_batches), eval_seed=train_eval_seed
-                )
-                te_loss, te_acc = _evaluate_xor(
-                    net, make_batch, dev, eval_batches=int(eval_batches), eval_seed=test_eval_seed
-                )
+                tr_loss, tr_acc = _evaluate_xor(net, train_x, train_y, train_m, dev, eval_batch_size=int(batch_size))
+                te_loss, te_acc = _evaluate_xor(net, test_x, test_y, test_m, dev, eval_batch_size=int(batch_size))
 
                 train_epochs.append(epoch)
                 train_accs.append(tr_acc)
@@ -725,10 +727,11 @@ def run_long_term_mem_xor(
 
         # final active parameter breakdown (post-training)
         try:
-            bd_layer_f = layer_active_param_breakdown(net.layer)  # type: ignore[attr-defined]
-            param_report_lines.append(f"[{mname}] layer1 final_active_param_breakdown")
-            param_report_lines.append(format_breakdown_table(bd_layer_f, prefix="  "))
-            param_report_lines.append(f"[{mname}] final_total_active_params = {sum(bd_layer_f.values())}")
+            all_bd_f = [layer_active_param_breakdown(layer) for layer in net.layers]
+            for li, bd_layer_f in enumerate(all_bd_f, start=1):
+                param_report_lines.append(f"[{mname}] layer{li} final_active_param_breakdown")
+                param_report_lines.append(format_breakdown_table(bd_layer_f, prefix="  "))
+            param_report_lines.append(f"[{mname}] final_total_active_params = {sum(sum(b.values()) for b in all_bd_f)}")
             # total params (trainable) is constant but record for completeness
             param_report_lines.append(f"[{mname}] total_params = {sum(int(p.numel()) for p in net.parameters())}")
         except Exception as e:
@@ -736,7 +739,8 @@ def run_long_term_mem_xor(
         param_report_lines.append("")
 
         # distributions
-        _save_single_model_distributions(net.layer, model_dir)  # type: ignore[attr-defined]
+        for layer in net.layers:
+            _save_single_model_distributions(layer, model_dir)
 
         # checkpoint
         torch.save({"model": net.state_dict(), "config": {"model": mname, "task": task}}, os.path.join(model_dir, "final.pt"))

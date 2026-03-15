@@ -10,6 +10,7 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PYTHON="${PYTHON:-python3}"
 RUN_PY="${ROOT_DIR}/src/basic_long_term_mem/multiscale_XOR/run.py"
 RESULT_DIR="${RESULT_DIR:-${ROOT_DIR}/result}"
+DATA_DIR="${DATA_DIR:-${ROOT_DIR}/data}"
 
 mkdir -p "${RESULT_DIR}"
 
@@ -23,6 +24,7 @@ RUN_PREFIX="${RUN_PREFIX:-multiscale_xor}"
 SEED="${SEED:-0}"
 
 MODELS="${MODELS:-my-dh-snn my-r-dh-snn my-d-rf}"
+HIDDEN="${HIDDEN:-256}"
 
 EPOCHS="${EPOCHS:-50}"
 
@@ -65,6 +67,7 @@ RATE_LOW="${RATE_LOW:-0.2}"
 RATE_HIGH="${RATE_HIGH:-0.6}"
 
 read -r -a MODELS_ARR <<< "${MODELS}"
+read -r -a HIDDEN_ARR <<< "${HIDDEN}"
 
 TS="$(date +%y%m%d_%H%M%S)"
 MODELS_TAG="${MODELS// /-}"
@@ -79,9 +82,11 @@ CMD=(
     --out_root "${RESULT_DIR}"
     --exp_name "${EXP_NAME}"
     --timestamp "${TS}"
+    --data_root "${DATA_DIR}"
     --gpu "${GPU}"
     --seed "${SEED}"
     --models "${MODELS_ARR[@]}"
+    --hidden "${HIDDEN_ARR[@]}"
     --epochs "${EPOCHS}"
     --soft_mask_epochs "${SOFT_MASK_EPOCHS}"
     --stabilize_epochs "${STABILIZE_EPOCHS}"
